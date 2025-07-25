@@ -1,8 +1,10 @@
+use crate::config::HttpPingerEntry;
 use crate::http_pinger;
 use crate::http_pinger::{AsyncHttpPinger, PingResponse, PingResult};
 use async_trait::async_trait;
 use hyper::Method;
 use reqwest::redirect::Policy;
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -11,32 +13,6 @@ pub(crate) struct ReqwestPinger {
     address: String,
     method: Method,
     reqwest_client: reqwest::Client,
-}
-
-impl ReqwestPinger {
-    pub fn new(url: String, method: Method) -> anyhow::Result<Self> {
-        let url = url.trim().to_string().parse::<url::Url>()?;
-        let host = url
-            .host()
-            .map(|h| h.to_string())
-            .ok_or_else(|| anyhow::anyhow!("Invalid URL: Host is missing in {}", url))?;
-        let port = match url.port_or_known_default() {
-            Some(p) => p,
-            None => return Err(anyhow::anyhow!("Unsupported URL scheme: {}", url.scheme())),
-        };
-
-        let builder = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .pool_max_idle_per_host(0)
-            .redirect(Policy::none());
-
-        Ok(ReqwestPinger {
-            url,
-            address: format!("{}:{}", host, port),
-            method,
-            reqwest_client: builder.build()?,
-        })
-    }
 }
 
 #[async_trait]
@@ -64,6 +40,31 @@ impl AsyncHttpPinger for ReqwestPinger {
             }
             Err(e) => Ok(http_pinger::wrap_soft_err(self, e, begin)),
         }
+    }
+    fn new(HttpPingerEntry { url, method }: HttpPingerEntry) -> anyhow::Result<Self> {
+        let method = Method::from_str(&method)
+            .map_err(|e| anyhow::anyhow!("Invalid HTTP method: {}: {}", method, e))?;
+        let url = url.trim().to_string().parse::<url::Url>()?;
+        let host = url
+            .host()
+            .map(|h| h.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Invalid URL: Host is missing in {}", url))?;
+        let port = match url.port_or_known_default() {
+            Some(p) => p,
+            None => return Err(anyhow::anyhow!("Unsupported URL scheme: {}", url.scheme())),
+        };
+
+        let builder = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .pool_max_idle_per_host(0)
+            .redirect(Policy::none());
+
+        Ok(ReqwestPinger {
+            url,
+            address: format!("{}:{}", host, port),
+            method,
+            reqwest_client: builder.build()?,
+        })
     }
 
     fn address(&self) -> &str {

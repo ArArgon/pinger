@@ -1,3 +1,4 @@
+use crate::config::HttpPingerEntry;
 use crate::http_pinger::{wrap_soft_err, AsyncHttpPinger, PingResponse, PingResult};
 use async_trait::async_trait;
 use http_body_util::Empty;
@@ -5,6 +6,7 @@ use hyper::body::{Body, Bytes, Incoming};
 use hyper::{Method, Request, Response, Version};
 use hyper_util::rt::TokioIo;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpStream;
@@ -28,32 +30,6 @@ struct Connect {
 }
 
 impl HyperPinger {
-    pub fn new(url: String, method: Method) -> anyhow::Result<Self> {
-        let url = url.trim().to_string().parse::<url::Url>()?;
-        let host = url
-            .host()
-            .map(|h| h.to_string())
-            .ok_or_else(|| anyhow::anyhow!("Invalid URL: Host is missing in {}", url))?;
-        let port = match url.port_or_known_default() {
-            Some(p) => p,
-            None => return Err(anyhow::anyhow!("Unsupported URL scheme: {}", url.scheme())),
-        };
-
-        // TLS setup
-        let mut root_cert_store = RootCertStore::empty();
-        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_no_client_auth();
-
-        Ok(HyperPinger {
-            url,
-            address: format!("{}:{}", host, port),
-            method,
-            tls_config: Arc::new(config),
-        })
-    }
-
     async fn connect_tls<B>(&self, req: Request<B>) -> anyhow::Result<Connect>
     where
         B: Body + Send + 'static,
@@ -147,6 +123,33 @@ impl AsyncHttpPinger for HyperPinger {
             }
             Err(e) => Err(anyhow::anyhow!("Failed to send request: {}", e)),
         }
+    }
+    fn new(HttpPingerEntry { url, method }: HttpPingerEntry) -> anyhow::Result<Self> {
+        let method = Method::from_str(&method)
+            .map_err(|e| anyhow::anyhow!("Invalid HTTP method: {}: {}", method, e))?;
+        let url = url.trim().to_string().parse::<url::Url>()?;
+        let host = url
+            .host()
+            .map(|h| h.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Invalid URL: Host is missing in {}", url))?;
+        let port = match url.port_or_known_default() {
+            Some(p) => p,
+            None => return Err(anyhow::anyhow!("Unsupported URL scheme: {}", url.scheme())),
+        };
+
+        // TLS setup
+        let mut root_cert_store = RootCertStore::empty();
+        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = ClientConfig::builder()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+
+        Ok(HyperPinger {
+            url,
+            address: format!("{}:{}", host, port),
+            method,
+            tls_config: Arc::new(config),
+        })
     }
 
     fn address(&self) -> &str {

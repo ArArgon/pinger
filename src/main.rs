@@ -1,3 +1,4 @@
+use crate::config::HttpPingerEntry;
 use crate::http_pinger::hyper_pinger::HyperPinger;
 use crate::http_pinger::AsyncHttpPinger;
 use anyhow::Result;
@@ -37,7 +38,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let pingers = urls
         .iter()
-        .map(|(url, method)| HyperPinger::new(url.to_string(), method.clone()))
+        .map(|(url, method)| {
+            HyperPinger::new(HttpPingerEntry {
+                url: url.to_string(),
+                method: method.to_string(),
+            })
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let interval = std::time::Duration::from_millis(10000);
     let retry_interval = std::time::Duration::from_millis(50);

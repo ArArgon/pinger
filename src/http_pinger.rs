@@ -1,6 +1,7 @@
 pub mod hyper_pinger;
 pub mod reqwest_pinger;
 
+use crate::config::HttpPingerEntry;
 use anyhow::Result;
 use async_trait::async_trait;
 use hyper::Method;
@@ -10,6 +11,10 @@ use std::time::{Duration, Instant};
 #[async_trait]
 pub trait AsyncHttpPinger {
     async fn ping(&self) -> Result<PingResponse>;
+
+    fn new(entry: HttpPingerEntry) -> Result<Self>
+    where
+        Self: Sized;
 
     fn address(&self) -> &str;
 
