@@ -12,16 +12,15 @@ pub(crate) struct ReqwestPinger {
     url: url::Url,
     address: String,
     method: Method,
+    timeout: Duration,
     reqwest_client: reqwest::Client,
 }
 
-#[async_trait]
-impl AsyncHttpPinger for ReqwestPinger {
-    async fn ping(&self) -> anyhow::Result<PingResponse> {
+impl ReqwestPinger {
+    async fn ping_inner(&self) -> anyhow::Result<PingResponse> {
         let builder = self
             .reqwest_client
-            .request(self.method.clone(), self.url.clone())
-            .timeout(Duration::from_secs(10));
+            .request(self.method.clone(), self.url.clone());
         let begin = Instant::now();
         match builder.send().await {
             Ok(response) => {
@@ -29,7 +28,7 @@ impl AsyncHttpPinger for ReqwestPinger {
                 let status = response.status();
                 Ok(PingResponse {
                     url: self.url.to_string(),
-                    ip: response.remote_addr().unwrap().to_string(),
+                    ip: Some(response.remote_addr().unwrap().to_string()),
                     send_time: begin,
                     result: PingResult::Success {
                         http_status: status.as_u16(),
@@ -41,7 +40,29 @@ impl AsyncHttpPinger for ReqwestPinger {
             Err(e) => Ok(http_pinger::wrap_soft_err(self, e, begin)),
         }
     }
-    fn new(HttpPingerEntry { url, method }: HttpPingerEntry) -> anyhow::Result<Self> {
+}
+
+#[async_trait]
+impl AsyncHttpPinger for ReqwestPinger {
+    async fn ping(&self) -> anyhow::Result<PingResponse> {
+        use tokio::time::timeout;
+        let task_submission_time = Instant::now();
+        let result = timeout(self.timeout, self.ping_inner()).await;
+
+        match result {
+            Ok(res) => res,
+            Err(_) => Ok(PingResponse {
+                url: self.url.to_string(),
+                ip: None,
+                send_time: task_submission_time,
+                result: PingResult::Timeout,
+            }),
+        }
+    }
+    fn new(
+        HttpPingerEntry { url, method }: HttpPingerEntry,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
         let method = Method::from_str(&method)
             .map_err(|e| anyhow::anyhow!("Invalid HTTP method: {}: {}", method, e))?;
         let url = url.trim().to_string().parse::<url::Url>()?;
@@ -55,7 +76,7 @@ impl AsyncHttpPinger for ReqwestPinger {
         };
 
         let builder = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
+            .connect_timeout(timeout)
             .pool_max_idle_per_host(0)
             .redirect(Policy::none());
 
@@ -63,6 +84,7 @@ impl AsyncHttpPinger for ReqwestPinger {
             url,
             address: format!("{}:{}", host, port),
             method,
+            timeout,
             reqwest_client: builder.build()?,
         })
     }

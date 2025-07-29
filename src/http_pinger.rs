@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 pub trait AsyncHttpPinger {
     async fn ping(&self) -> Result<PingResponse>;
 
-    fn new(entry: HttpPingerEntry) -> Result<Self>
+    fn new(entry: HttpPingerEntry, timeout: Duration) -> Result<Self>
     where
         Self: Sized;
 
@@ -26,7 +26,7 @@ pub trait AsyncHttpPinger {
 #[derive(Debug, Clone)]
 pub struct PingResponse {
     pub url: String,
-    pub ip: String,
+    pub ip: Option<String>,
     pub send_time: Instant,
     pub result: PingResult,
 }
@@ -39,12 +39,13 @@ pub enum PingResult {
         version: hyper::Version,
     },
     Failure(String),
+    Timeout,
 }
 
 fn wrap_soft_err<E: Display>(pinger: &impl AsyncHttpPinger, e: E, begin: Instant) -> PingResponse {
     PingResponse {
         url: pinger.url().to_string(),
-        ip: pinger.address().to_owned(),
+        ip: None,
         send_time: begin,
         result: PingResult::Failure(e.to_string()),
     }

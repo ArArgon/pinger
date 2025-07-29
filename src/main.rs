@@ -5,6 +5,7 @@ use anyhow::Result;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::Resolver;
+use std::time::Duration;
 use tokio::task::JoinHandle;
 
 mod config;
@@ -39,14 +40,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pingers = urls
         .iter()
         .map(|(url, method)| {
-            HyperPinger::new(HttpPingerEntry {
-                url: url.to_string(),
-                method: method.to_string(),
-            })
+            HyperPinger::new(
+                HttpPingerEntry {
+                    url: url.to_string(),
+                    method: method.to_string(),
+                },
+                Duration::from_secs(10),
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let interval = std::time::Duration::from_millis(10000);
-    let retry_interval = std::time::Duration::from_millis(50);
+    let interval = Duration::from_millis(10000);
+    let retry_interval = Duration::from_millis(50);
     let handles: Vec<JoinHandle<Result<http_pinger::PingResponse>>> = pingers
         .into_iter()
         .map(|pinger| {

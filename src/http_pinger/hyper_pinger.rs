@@ -5,10 +5,12 @@ use http_body_util::Empty;
 use hyper::body::{Body, Bytes, Incoming};
 use hyper::{Method, Request, Response, Version};
 use hyper_util::rt::TokioIo;
+use std::net::SocketAddr;
+use std::ops::Add;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -20,10 +22,12 @@ pub(crate) struct HyperPinger {
     url: url::Url,
     address: String,
     method: Method,
+    timeout: Duration,
     tls_config: Arc<ClientConfig>,
 }
 
 struct Connect {
+    peer_address: SocketAddr,
     begin: Instant,
     res: Pin<Box<dyn Future<Output = anyhow::Result<Response<Incoming>, hyper::Error>> + Send>>,
     handle: JoinHandle<anyhow::Result<(), hyper::Error>>,
@@ -42,6 +46,7 @@ impl HyperPinger {
         let begin = Instant::now();
         let dns_name = ServerName::try_from(host.to_string())?;
         let tcp = TcpStream::connect(&self.address).await?;
+        let peer_address = tcp.peer_addr()?;
         let stream = connector.connect(dns_name, tcp).await?;
 
         let io = TokioIo::new(stream);
@@ -52,6 +57,7 @@ impl HyperPinger {
         let res = sender.send_request(req);
         Ok(Connect {
             begin,
+            peer_address,
             res: Box::pin(res),
             handle,
         })
@@ -65,6 +71,7 @@ impl HyperPinger {
     {
         let begin = Instant::now();
         let tcp = TcpStream::connect(&self.address).await?;
+        let peer_address = tcp.peer_addr()?;
         let io = TokioIo::new(tcp);
         let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
 
@@ -73,6 +80,7 @@ impl HyperPinger {
         let res = sender.send_request(req);
         Ok(Connect {
             begin,
+            peer_address,
             res: Box::pin(res),
             handle,
         })
@@ -85,11 +93,8 @@ impl HyperPinger {
             .uri(self.url.as_str())
             .body(Empty::<Bytes>::new())?)
     }
-}
 
-#[async_trait]
-impl AsyncHttpPinger for HyperPinger {
-    async fn ping(&self) -> anyhow::Result<PingResponse> {
+    async fn ping_inner(&self) -> anyhow::Result<PingResponse> {
         let req = self.build_request()?;
         let conn_result = if self.url.scheme() == "https" {
             self.connect_tls(req).await
@@ -97,7 +102,12 @@ impl AsyncHttpPinger for HyperPinger {
             self.connect_http(req).await
         };
 
-        let Connect { begin, res, handle } = match conn_result {
+        let Connect {
+            begin,
+            res,
+            handle,
+            peer_address,
+        } = match conn_result {
             Ok(result) => result,
             Err(e) => return Ok(wrap_soft_err(self, e, Instant::now())),
         };
@@ -112,7 +122,7 @@ impl AsyncHttpPinger for HyperPinger {
                 let status = response.status();
                 Ok(PingResponse {
                     url: self.url.to_string(),
-                    ip: self.address.clone(),
+                    ip: Some(peer_address.ip().to_string()),
                     send_time: begin,
                     result: PingResult::Success {
                         http_status: status.as_u16(),
@@ -124,7 +134,34 @@ impl AsyncHttpPinger for HyperPinger {
             Err(e) => Err(anyhow::anyhow!("Failed to send request: {}", e)),
         }
     }
-    fn new(HttpPingerEntry { url, method }: HttpPingerEntry) -> anyhow::Result<Self> {
+}
+
+#[async_trait]
+impl AsyncHttpPinger for HyperPinger {
+    async fn ping(&self) -> anyhow::Result<PingResponse> {
+        use tokio::time::{timeout_at, Instant as TokioInstant};
+
+        let begin = Instant::now();
+        let result = timeout_at(
+            TokioInstant::from(begin.add(self.timeout)),
+            self.ping_inner(),
+        )
+        .await;
+
+        match result {
+            Ok(res) => res,
+            Err(_) => Ok(PingResponse {
+                url: self.url.to_string(),
+                ip: None,
+                send_time: begin,
+                result: PingResult::Timeout,
+            }),
+        }
+    }
+    fn new(
+        HttpPingerEntry { url, method }: HttpPingerEntry,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
         let method = Method::from_str(&method)
             .map_err(|e| anyhow::anyhow!("Invalid HTTP method: {}: {}", method, e))?;
         let url = url.trim().to_string().parse::<url::Url>()?;
@@ -148,6 +185,7 @@ impl AsyncHttpPinger for HyperPinger {
             url,
             address: format!("{}:{}", host, port),
             method,
+            timeout,
             tls_config: Arc::new(config),
         })
     }

@@ -1,29 +1,32 @@
+use crate::config::TcpPingerEntry;
 use anyhow::Result;
 use hickory_resolver::name_server::TokioConnectionProvider;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 use tokio::net::TcpSocket;
+use tokio_rustls::rustls::pki_types::ServerName;
 use url::Url;
 
 type Resolver = hickory_resolver::Resolver<TokioConnectionProvider>;
 
 #[derive(Debug, Clone)]
-pub struct TcpPingResponse {
-    pub address: String,
+pub struct TcpPingResult<'pinger> {
+    pub address: (ServerName<'pinger>, u16),
     pub resolved_ip: IpAddr,
     pub newly_resolved: bool,
     pub send_time: Instant,
-    pub result: TcpPingResult,
+    pub response: TcpPingResponse,
 }
 
 #[derive(Debug, Clone)]
-pub enum TcpPingResult {
+pub enum TcpPingResponse {
     Success {
-        address: SocketAddr,
+        endpoint: SocketAddr,
         resolve_time: Option<Duration>,
         established_time: Duration,
     },
     Failure(String),
+    Timeout,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -33,7 +36,7 @@ enum ResolvePolicy {
 }
 
 pub struct TcpPinger {
-    host: String,
+    host: ServerName<'static>,
     port: u16,
     timeout: Duration,
     resolver: Resolver,
@@ -96,38 +99,75 @@ impl TcpPinger {
         }
     }
 
+    fn wrap_soft_err<E: std::fmt::Display>(&self, e: E, begin: Instant) -> Result<TcpPingResult> {
+        Ok(TcpPingResult {
+            address: (self.host.clone(), self.port),
+            resolved_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            newly_resolved: false,
+            send_time: begin,
+            response: TcpPingResponse::Failure(e.to_string()),
+        })
+    }
+
+    fn wrap_timeout(&self, begin: Instant) -> Result<TcpPingResult> {
+        Ok(TcpPingResult {
+            address: (self.host.clone(), self.port),
+            resolved_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            newly_resolved: false,
+            send_time: begin,
+            response: TcpPingResponse::Timeout,
+        })
+    }
+
     async fn resolve_addr(&self) -> Result<IpAddr> {
         let host = &self.host;
-        let ip = self.resolver.lookup_ip(host).await?;
-        if let Some(ip) = ip.iter().next() {
-            Ok(ip)
-        } else {
-            Err(anyhow::anyhow!("No IP addresses found for host: {}", host))
+
+        match host {
+            ServerName::IpAddress(ip) => Ok(IpAddr::from(*ip)),
+            ServerName::DnsName(name) => {
+                let ip = self.resolver.lookup_ip(name.as_ref()).await?;
+                if let Some(ip) = ip.iter().next() {
+                    Ok(ip)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "No IP addresses found for host: {}",
+                        name.as_ref()
+                    ))
+                }
+            }
+            _ => unreachable!("unexpected ServerName variant"),
         }
     }
 
     pub async fn new(
-        address: String,
+        TcpPingerEntry {
+            host,
+            port,
+            always_resolve,
+        }: TcpPingerEntry,
         timeout: Duration,
-        always_resolve: bool,
         resolver: Resolver,
     ) -> Result<Self> {
-        let address = Self::normalize_address(&address)?;
-        let is_ip = Self::is_ip(&address);
-        let host = address.host_str().unwrap().to_string();
-        let port = address.port().unwrap();
+        let host = ServerName::try_from(host)?;
 
-        let resolve = if is_ip {
-            ResolvePolicy::Resolved(address.host_str().unwrap().parse::<IpAddr>()?)
-        } else if always_resolve {
-            ResolvePolicy::Always
-        } else {
-            let ip = resolver.lookup_ip(&host).await?;
-            if let Some(ip) = ip.iter().next() {
-                ResolvePolicy::Resolved(ip)
-            } else {
-                return Err(anyhow::anyhow!("No IP addresses found for host: {}", host));
+        let resolve = match host.clone() {
+            ServerName::IpAddress(ip) => ResolvePolicy::Resolved(IpAddr::from(ip)),
+            ServerName::DnsName(name) => {
+                if always_resolve {
+                    ResolvePolicy::Always
+                } else {
+                    let ip = resolver.lookup_ip(name.as_ref()).await?;
+                    if let Some(ip) = ip.iter().next() {
+                        ResolvePolicy::Resolved(ip)
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "No IP addresses found for host: {}",
+                            name.as_ref()
+                        ));
+                    }
+                }
             }
+            _ => unreachable!("unexpected ServerName variant"),
         };
 
         Ok(Self {
@@ -139,19 +179,16 @@ impl TcpPinger {
         })
     }
 
-    pub async fn ping(&self) -> Result<TcpPingResult> {
+    async fn ping_inner(&self) -> Result<TcpPingResult> {
+        let mut resolve_time: Option<Duration> = None;
         let begin = Instant::now();
-        let mut resolve_time = None;
         let resolved_ip = match &self.policy {
             ResolvePolicy::Always => match self.resolve_addr().await {
-                Ok(_) if begin.elapsed() > self.timeout => {
-                    return Ok(TcpPingResult::Failure("Resolution timed out".to_string()));
-                }
                 Ok(ip) => {
                     resolve_time = Some(begin.elapsed());
                     ip
                 }
-                Err(e) => return Ok(TcpPingResult::Failure(e.to_string())),
+                Err(e) => return self.wrap_soft_err(e, begin),
             },
             ResolvePolicy::Resolved(ip) => *ip,
         };
@@ -162,14 +199,39 @@ impl TcpPinger {
         };
 
         if let Err(e) = socket.connect(socket_addr).await {
-            return Ok(TcpPingResult::Failure(e.to_string()));
+            return self.wrap_soft_err(e, begin);
         }
 
         let established_time = begin.elapsed();
-        Ok(TcpPingResult::Success {
-            resolve_time,
-            address: socket_addr,
-            established_time,
+        Ok(TcpPingResult {
+            address: (self.host.clone(), self.port),
+            resolved_ip,
+            newly_resolved: matches!(self.policy, ResolvePolicy::Always),
+            send_time: begin,
+            response: TcpPingResponse::Success {
+                endpoint: socket_addr,
+                resolve_time,
+                established_time,
+            },
         })
+    }
+
+    pub async fn ping(&self) -> Result<TcpPingResult> {
+        let task_submission_time = Instant::now();
+        let result =
+            tokio::time::timeout(self.timeout, async move { self.ping_inner().await }).await;
+
+        match result {
+            Ok(Ok(res)) => Ok(res),
+            Ok(Err(e)) => {
+                // This is not a soft error, but a failure to ping
+                panic!(
+                    "fatal error occurs when pinging {}: {}",
+                    self.host.to_str(),
+                    e
+                );
+            }
+            Err(_) => self.wrap_timeout(task_submission_time),
+        }
     }
 }

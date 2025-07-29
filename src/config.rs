@@ -16,21 +16,22 @@ pub struct HttpPingerEntry {
 pub struct HttpPingerConfig {
     pub pinger: HttpPinger,
     pub retries: u8,
-    pub timeout_sec: u64,
+    pub timeout_millis: u64,
     pub interval_millis: u64,
     pub entries: Vec<HttpPingerEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpPingerEntry {
-    pub address: String,
+    pub always_resolve: bool,
+    pub host: String,
     pub port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpPingerConfig {
     pub retries: u8,
-    pub timeout_sec: u64,
+    pub timeout_millis: u64,
     pub interval_millis: u64,
     pub entries: Vec<TcpPingerEntry>,
 }
