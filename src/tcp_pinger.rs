@@ -5,13 +5,12 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 use tokio::net::TcpSocket;
 use tokio_rustls::rustls::pki_types::ServerName;
-use url::Url;
 
 type Resolver = hickory_resolver::Resolver<TokioConnectionProvider>;
 
 #[derive(Debug, Clone)]
-pub struct TcpPingResult<'pinger> {
-    pub address: (ServerName<'pinger>, u16),
+pub struct TcpPingResult {
+    pub address: (ServerName<'static>, u16),
     pub resolved_ip: IpAddr,
     pub newly_resolved: bool,
     pub send_time: Instant,
@@ -44,61 +43,6 @@ pub struct TcpPinger {
 }
 
 impl TcpPinger {
-    fn normalize_address(address: &str) -> Result<Url> {
-        let url = Url::parse(address)?;
-        if url.host_str().is_none() {
-            return Err(anyhow::anyhow!(
-                "Address must contain a valid host: {}",
-                address
-            ));
-        }
-        if url.port().is_none() {
-            return Err(anyhow::anyhow!(
-                "Address must contain a valid port: {}",
-                address
-            ));
-        }
-        if !url.scheme().is_empty() {
-            return Err(anyhow::anyhow!(
-                "Address should not contain a scheme: {}",
-                address
-            ));
-        }
-        if !url.path().is_empty() {
-            return Err(anyhow::anyhow!(
-                "Address should not contain a path: {}",
-                address
-            ));
-        }
-        if !url.query().is_none() {
-            return Err(anyhow::anyhow!(
-                "Address should not contain a query: {}",
-                address
-            ));
-        }
-        if !url.fragment().is_none() {
-            return Err(anyhow::anyhow!(
-                "Address should not contain a fragment: {}",
-                address
-            ));
-        }
-        if !url.username().is_empty() || !url.password().is_none() {
-            return Err(anyhow::anyhow!(
-                "Address should not contain credentials: {}",
-                address
-            ));
-        }
-        Ok(url)
-    }
-
-    fn is_ip(address: &Url) -> bool {
-        if let Some(host) = address.host_str() {
-            host.parse::<IpAddr>().is_ok()
-        } else {
-            false
-        }
-    }
-
     fn wrap_soft_err<E: std::fmt::Display>(&self, e: E, begin: Instant) -> Result<TcpPingResult> {
         Ok(TcpPingResult {
             address: (self.host.clone(), self.port),

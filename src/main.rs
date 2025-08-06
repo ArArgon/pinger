@@ -1,15 +1,20 @@
 use crate::config::HttpPingerEntry;
 use crate::http_pinger::hyper_pinger::HyperPinger;
 use crate::http_pinger::AsyncHttpPinger;
+use crate::metric::PingMetrics;
+use crate::metrics_server::{start_metrics_server, SharedMetrics};
 use anyhow::Result;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::Resolver;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
 mod config;
 mod http_pinger;
+mod metric;
+mod metrics_server;
 mod tcp_pinger;
 
 fn build_resolver() -> Resolver<TokioConnectionProvider> {
@@ -23,6 +28,19 @@ fn build_resolver() -> Resolver<TokioConnectionProvider> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize metrics
+    let metrics: SharedMetrics = Arc::new(PingMetrics::default());
+
+    // Start metrics server in background
+    let metrics_server_handle = {
+        let metrics_clone = Arc::clone(&metrics);
+        tokio::spawn(async move {
+            if let Err(e) = start_metrics_server(metrics_clone, 3000).await {
+                eprintln!("Metrics server error: {}", e);
+            }
+        })
+    };
+
     let resolver = build_resolver();
 
     let urls = vec![
@@ -37,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("https://www.facebook.com", hyper::Method::HEAD),
         ("https://www.linkedin.com", hyper::Method::HEAD),
     ];
+
     let pingers = urls
         .iter()
         .map(|(url, method)| {
@@ -48,44 +67,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Duration::from_secs(10),
             )
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    let interval = Duration::from_millis(10000);
-    let retry_interval = Duration::from_millis(50);
-    let handles: Vec<JoinHandle<Result<http_pinger::PingResponse>>> = pingers
+        .collect::<Result<Vec<_>>>()?;
+
+    // Create ping tasks with metrics recording
+    let ping_tasks: Vec<JoinHandle<()>> = pingers
         .into_iter()
         .map(|pinger| {
+            let metrics_clone = Arc::clone(&metrics);
             tokio::spawn(async move {
                 loop {
-                    for retry in 0..3 {
-                        match pinger.ping().await {
-                            Ok(response) => {
-                                println!("{:?}", response);
-                                break;
-                            }
-                            Err(e) => {
-                                eprintln!("Error pinging {}: {}", pinger.address(), e);
-                            }
+                    metrics_clone.inc_active_pings();
+
+                    match pinger.ping().await {
+                        Ok(response) => {
+                            println!("Ping response: {:?}", response);
+                            metrics_clone.record_http_ping(&response, None);
                         }
-                        if retry < 2 {
-                            tokio::time::sleep(retry_interval).await;
-                        } else {
-                            break; // Exit the retry loop after 3 attempts
+                        Err(e) => {
+                            eprintln!("Ping error: {}", e);
                         }
                     }
 
-                    tokio::time::sleep(interval).await;
+                    metrics_clone.dec_active_pings();
+                    tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             })
         })
         .collect();
 
-    for handle in handles {
-        match handle.await {
-            Ok(Ok(response)) => println!("Ping response: {:?}", response),
-            Ok(Err(e)) => eprintln!("Error in ping task: {}", e),
-            Err(e) => eprintln!("Task join error: {}", e),
-        }
+    println!("Started {} ping tasks", ping_tasks.len());
+    println!("Metrics server running on http://localhost:3000/metrics");
+
+    // Wait for all tasks (runs indefinitely)
+    for task in ping_tasks {
+        let _ = task.await;
     }
+
+    // Wait for metrics server
+    let _ = metrics_server_handle.await;
 
     Ok(())
 }
