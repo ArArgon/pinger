@@ -1,5 +1,4 @@
 use crate::config::HttpPingerEntry;
-use crate::http_pinger;
 use crate::http_pinger::{AsyncHttpPinger, PingResponse, PingResult};
 use async_trait::async_trait;
 use hyper::Method;
@@ -30,6 +29,7 @@ impl ReqwestPinger {
                     url: self.url.to_string(),
                     ip: Some(response.remote_addr().unwrap().to_string()),
                     send_time: begin,
+                    method: self.method.clone(),
                     result: PingResult::Success {
                         http_status: status.as_u16(),
                         response_time,
@@ -37,7 +37,7 @@ impl ReqwestPinger {
                     },
                 })
             }
-            Err(e) => Ok(http_pinger::wrap_soft_err(self, e, begin)),
+            Err(e) => Ok(self.wrap_soft_err(e, begin)),
         }
     }
 }
@@ -54,6 +54,7 @@ impl AsyncHttpPinger for ReqwestPinger {
             Err(_) => Ok(PingResponse {
                 url: self.url.to_string(),
                 ip: None,
+                method: self.method.clone(),
                 send_time: task_submission_time,
                 result: PingResult::Timeout,
             }),

@@ -21,6 +21,16 @@ pub trait AsyncHttpPinger {
     fn url(&self) -> &url::Url;
 
     fn method(&self) -> &Method;
+
+    fn wrap_soft_err<E: Display>(&self, e: E, begin: Instant) -> PingResponse {
+        PingResponse {
+            url: self.url().to_string(),
+            ip: None,
+            send_time: begin,
+            method: self.method().clone(),
+            result: PingResult::Failure(e.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +38,7 @@ pub struct PingResponse {
     pub url: String,
     pub ip: Option<String>,
     pub send_time: Instant,
+    pub method: Method,
     pub result: PingResult,
 }
 
@@ -40,13 +51,4 @@ pub enum PingResult {
     },
     Failure(String),
     Timeout,
-}
-
-fn wrap_soft_err<E: Display>(pinger: &impl AsyncHttpPinger, e: E, begin: Instant) -> PingResponse {
-    PingResponse {
-        url: pinger.url().to_string(),
-        ip: None,
-        send_time: begin,
-        result: PingResult::Failure(e.to_string()),
-    }
 }

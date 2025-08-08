@@ -1,5 +1,5 @@
 use crate::config::HttpPingerEntry;
-use crate::http_pinger::{wrap_soft_err, AsyncHttpPinger, PingResponse, PingResult};
+use crate::http_pinger::{AsyncHttpPinger, PingResponse, PingResult};
 use async_trait::async_trait;
 use http_body_util::Empty;
 use hyper::body::{Body, Bytes, Incoming};
@@ -109,7 +109,7 @@ impl HyperPinger {
             peer_address,
         } = match conn_result {
             Ok(result) => result,
-            Err(e) => return Ok(wrap_soft_err(self, e, Instant::now())),
+            Err(e) => return Ok(self.wrap_soft_err(e, Instant::now())),
         };
 
         if let Err(e) = handle.await {
@@ -124,6 +124,7 @@ impl HyperPinger {
                     url: self.url.to_string(),
                     ip: Some(peer_address.ip().to_string()),
                     send_time: begin,
+                    method: self.method.clone(),
                     result: PingResult::Success {
                         http_status: status.as_u16(),
                         response_time,
@@ -154,6 +155,7 @@ impl AsyncHttpPinger for HyperPinger {
                 url: self.url.to_string(),
                 ip: None,
                 send_time: begin,
+                method: self.method.clone(),
                 result: PingResult::Timeout,
             }),
         }

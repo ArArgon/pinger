@@ -28,7 +28,7 @@ async fn metrics_handler(State(metrics): State<SharedMetrics>) -> impl IntoRespo
 }
 
 async fn health_handler() -> impl IntoResponse {
-    (StatusCode::OK, "OK")
+    (StatusCode::OK, "{\"status\": \"ok\"}")
 }
 
 pub async fn start_metrics_server(
