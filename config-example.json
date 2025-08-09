@@ -1,0 +1,31 @@
+{
+  "http": {
+    "pinger": "Reqwest",
+    "retries": 2,
+    "timeout_millis": 5000,
+    "interval_millis": 2000,
+    "entries": [
+      {
+        "url": "https://httpbin.org/get",
+        "method": "GET"
+      }
+    ]
+  },
+  "tcp": {
+    "retries": 1,
+    "timeout_millis": 3000,
+    "interval_millis": 2000,
+    "entries": [
+      {
+        "always_resolve": false,
+        "host": "8.8.8.8",
+        "port": 53
+      }
+    ]
+  },
+  "metrics": {
+    "host": "0.0.0.0",
+    "port": 9090
+  }
+}
+

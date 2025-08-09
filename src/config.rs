@@ -37,7 +37,14 @@ pub struct TcpPingerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsServerConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PingerConfig {
     pub http: HttpPingerConfig,
     pub tcp: TcpPingerConfig,
+    pub metrics: MetricsServerConfig,
 }

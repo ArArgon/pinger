@@ -33,18 +33,17 @@ async fn health_handler() -> impl IntoResponse {
 
 pub async fn start_metrics_server(
     metrics: SharedMetrics,
+    host: &str,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let app = create_metrics_router(metrics);
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+    let bind_address = format!("{}:{}", host, port);
+    let listener = tokio::net::TcpListener::bind(&bind_address).await?;
 
-    println!("Metrics server starting on http://0.0.0.0:{}", port);
-    println!("Metrics available at: http://localhost:{}/metrics", port);
-    println!(
-        "Health check available at: http://localhost:{}/health",
-        port
-    );
+    println!("Metrics server starting on http://{}", bind_address);
+    println!("Metrics available at: http://{}:{}/metrics", host, port);
+    println!("Health check available at: http://{}:{}/health", host, port);
 
     axum::serve(listener, app).await?;
 
