@@ -69,26 +69,19 @@ impl Default for PingMetrics {
 
         // Register PRIMARY metrics for individual ping results (fine-grained data)
         registry.register(
-            "http_ping_response_time_milliseconds",
-            "Individual HTTP ping response time in milliseconds - updates with each ping",
+            "http_ping_response_time_us",
+            "Individual HTTP ping response time in us - updates with each ping",
             http_ping_response_time_us.clone(),
         );
         registry.register(
-            "tcp_ping_response_time_milliseconds",
-            "Individual TCP ping response time in milliseconds - updates with each ping",
+            "tcp_ping_response_time_us",
+            "Individual TCP ping response time in us - updates with each ping",
             tcp_ping_response_time_us.clone(),
         );
         registry.register(
-            "tcp_ping_resolve_time_milliseconds",
-            "Individual TCP ping resolve time in milliseconds - updates with each ping",
+            "tcp_ping_resolve_time_us",
+            "Individual TCP ping resolve time in us - updates with each ping",
             tcp_ping_resolve_time_us.clone(),
-        );
-
-        // Register other metrics
-        registry.register(
-            "http_ping_failure",
-            "Failure number of HTTP ping requests",
-            http_ping_failure.clone(),
         );
 
         Self {
@@ -106,7 +99,7 @@ impl PingMetrics {
     pub fn record_http_ping(&self, response: &http_pinger::PingResponse) {
         let label = HttpPingLabel::from(response.clone());
 
-        // Record individual ping response time in milliseconds
+        // Record individual ping response time in us
         if let http_pinger::PingResult::Success { response_time, .. } = &response.result {
             self.http_ping_response_time_us
                 .get_or_create(&label)
@@ -120,7 +113,7 @@ impl PingMetrics {
     pub fn record_tcp_ping(&self, result: &tcp_pinger::TcpPingResult) {
         let label = TcpPingLabel::from(result.clone());
 
-        // Record duration if available - convert to milliseconds for higher precision
+        // Record duration if available - convert to us for higher precision
         if let tcp_pinger::TcpPingResponse::Success {
             established_time,
             resolve_time,
