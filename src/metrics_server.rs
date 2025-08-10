@@ -1,10 +1,7 @@
-use crate::metric::PingMetrics;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Router};
+use crate::metric::SharedMetrics;
+use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use prometheus_client::encoding::text::encode;
-use std::sync::Arc;
 use tower_http::cors::CorsLayer;
-
-pub type SharedMetrics = Arc<PingMetrics>;
 
 pub fn create_metrics_router(metrics: SharedMetrics) -> Router {
     Router::new()

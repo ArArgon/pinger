@@ -1,18 +1,16 @@
 use crate::config::TcpPingerEntry;
+use crate::resolver::{Resolve, resolve_str};
 use anyhow::Result;
-use hickory_resolver::name_server::TokioConnectionProvider;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpSocket;
 use tokio_rustls::rustls::pki_types::ServerName;
-
-type Resolver = hickory_resolver::Resolver<TokioConnectionProvider>;
 
 #[derive(Debug, Clone)]
 pub struct TcpPingResult {
     pub address: (ServerName<'static>, u16),
     pub resolved_ip: IpAddr,
-    pub newly_resolved: bool,
     pub send_time: Instant,
     pub response: TcpPingResponse,
 }
@@ -38,7 +36,7 @@ pub struct TcpPinger {
     host: ServerName<'static>,
     port: u16,
     timeout: Duration,
-    resolver: Resolver,
+    resolver: Arc<dyn Resolve>,
     policy: ResolvePolicy,
 }
 
@@ -47,7 +45,6 @@ impl TcpPinger {
         Ok(TcpPingResult {
             address: (self.host.clone(), self.port),
             resolved_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
-            newly_resolved: false,
             send_time: begin,
             response: TcpPingResponse::Failure(e.to_string()),
         })
@@ -57,7 +54,6 @@ impl TcpPinger {
         Ok(TcpPingResult {
             address: (self.host.clone(), self.port),
             resolved_ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
-            newly_resolved: false,
             send_time: begin,
             response: TcpPingResponse::Timeout,
         })
@@ -69,46 +65,27 @@ impl TcpPinger {
         match host {
             ServerName::IpAddress(ip) => Ok(IpAddr::from(*ip)),
             ServerName::DnsName(name) => {
-                let ip = self.resolver.lookup_ip(name.as_ref()).await?;
-                if let Some(ip) = ip.iter().next() {
-                    Ok(ip)
-                } else {
-                    Err(anyhow::anyhow!(
-                        "No IP addresses found for host: {}",
-                        name.as_ref()
-                    ))
-                }
+                Ok(resolve_str(self.resolver.as_ref(), name.as_ref()).await?)
             }
             _ => unreachable!("unexpected ServerName variant"),
         }
     }
 
     pub async fn new(
-        TcpPingerEntry {
-            host,
-            port,
-            always_resolve,
-        }: TcpPingerEntry,
+        TcpPingerEntry { host, port }: TcpPingerEntry,
         timeout: Duration,
-        resolver: Resolver,
+        measure_dns: bool,
+        resolver: Arc<dyn Resolve>,
     ) -> Result<Self> {
         let host = ServerName::try_from(host)?;
 
         let resolve = match host.clone() {
             ServerName::IpAddress(ip) => ResolvePolicy::Resolved(IpAddr::from(ip)),
             ServerName::DnsName(name) => {
-                if always_resolve {
+                if measure_dns {
                     ResolvePolicy::Always
                 } else {
-                    let ip = resolver.lookup_ip(name.as_ref()).await?;
-                    if let Some(ip) = ip.iter().next() {
-                        ResolvePolicy::Resolved(ip)
-                    } else {
-                        return Err(anyhow::anyhow!(
-                            "No IP addresses found for host: {}",
-                            name.as_ref()
-                        ));
-                    }
+                    ResolvePolicy::Resolved(resolve_str(resolver.as_ref(), name.as_ref()).await?)
                 }
             }
             _ => unreachable!("unexpected ServerName variant"),
@@ -118,7 +95,7 @@ impl TcpPinger {
             host,
             port,
             timeout,
-            resolver,
+            resolver: resolver as _,
             policy: resolve,
         })
     }
@@ -150,7 +127,6 @@ impl TcpPinger {
         Ok(TcpPingResult {
             address: (self.host.clone(), self.port),
             resolved_ip,
-            newly_resolved: matches!(self.policy, ResolvePolicy::Always),
             send_time: begin,
             response: TcpPingResponse::Success {
                 endpoint: socket_addr,

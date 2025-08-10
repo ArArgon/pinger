@@ -12,7 +12,7 @@ async-trait = "0.1"
 anyhow = "1"
 tokio-rustls = "0.26"
 webpki-roots = "1.0.2"
-reqwest = "0.12"
+reqwest = { git = "https://github.com/ArArgon/reqwest" }
 hickory-resolver = "0.25"
 prometheus-client = "0.23"
 serde = { version = "1", features = ["derive"] }

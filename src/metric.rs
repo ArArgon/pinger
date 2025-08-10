@@ -2,14 +2,21 @@ use crate::{http_pinger, tcp_pinger};
 use prometheus_client::encoding::{EncodeLabelSet, EncodeLabelValue};
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
-use prometheus_client::metrics::gauge::Gauge;
+use prometheus_client::metrics::histogram::{Histogram, exponential_buckets_range};
 use prometheus_client::registry::Registry;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelValue)]
-pub enum PingResponse {
+pub enum PingStatus {
     Success,
     Timeout,
     Failure,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelValue)]
+pub enum FailureType {
+    DNS,
+    Other,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -17,31 +24,59 @@ pub struct HttpPingLabel {
     pub url: String,
     pub method: String,
     pub ip: Option<String>,
-    pub response: PingResponse,
-    pub version: Option<String>,
-    pub status_code: Option<u32>, // Changed to String for better label encoding
+    pub status: PingStatus,
+    pub status_code: Option<u32>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct HttpPingFailureLabel {
+    pub url: String,
+    pub method: String,
+    pub failure_type: FailureType,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct TcpPingLabel {
     pub host: String,
-    pub port: u32, // Changed to String for better label encoding
+    pub port: u32,
     pub resolved_ip: String,
-    pub newly_resolved: bool,
-    pub response: PingResponse,
+    pub response: PingStatus,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct TcpPingFailureLabel {
+    pub host: String,
+    pub port: u32,
+    pub failure_type: FailureType,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ResolveLabel {
+    pub host: String,
 }
 
 pub struct PingMetrics {
     pub registry: Registry,
 
     // HTTP metrics - Gauge-based individual ping results
-    pub http_ping_response_time_us: Family<HttpPingLabel, Gauge>,
+    pub http_ping_response_time_us: Family<HttpPingLabel, Histogram>,
     pub http_ping_failure: Family<HttpPingLabel, Counter>,
 
     // TCP metrics - Gauge-based individual ping results
-    pub tcp_ping_response_time_us: Family<TcpPingLabel, Gauge>,
-    pub tcp_ping_resolve_time_us: Family<TcpPingLabel, Gauge>,
+    pub tcp_ping_response_time_us: Family<TcpPingLabel, Histogram>,
     pub tcp_ping_failure: Family<TcpPingLabel, Counter>,
+
+    // DNS metrics
+    pub resolve_time_us: Family<ResolveLabel, Histogram>,
+    pub resolve_failure: Family<ResolveLabel, Counter>,
+}
+
+pub type SharedMetrics = Arc<PingMetrics>;
+
+impl PingMetrics {
+    fn default_histogram() -> Histogram {
+        Histogram::new(exponential_buckets_range(100.0, 2e6, 20))
+    }
 }
 
 impl Default for PingMetrics {
@@ -50,12 +85,17 @@ impl Default for PingMetrics {
 
         let http_ping_failure = Family::<HttpPingLabel, Counter>::default();
         let tcp_ping_failure = Family::<TcpPingLabel, Counter>::default();
+        let resolve_failure = Family::<ResolveLabel, Counter>::default();
 
-        let http_ping_response_time_us = Family::<HttpPingLabel, Gauge>::default();
-        let tcp_ping_response_time_us = Family::<TcpPingLabel, Gauge>::default();
-        let tcp_ping_resolve_time_us = Family::<TcpPingLabel, Gauge>::default();
+        let http_ping_response_time_us =
+            Family::<HttpPingLabel, Histogram>::new_with_constructor(Self::default_histogram);
+        let tcp_ping_response_time_us =
+            Family::<TcpPingLabel, Histogram>::new_with_constructor(Self::default_histogram);
+        let tcp_ping_resolve_time_us =
+            Family::<TcpPingLabel, Histogram>::new_with_constructor(Self::default_histogram);
+        let resolve_time_us =
+            Family::<ResolveLabel, Histogram>::new_with_constructor(Self::default_histogram);
 
-        // Register metrics with millisecond precision naming
         registry.register(
             "http_ping_failure",
             "Failure number of HTTP ping requests",
@@ -66,22 +106,30 @@ impl Default for PingMetrics {
             "Failure number of TCP ping requests",
             tcp_ping_failure.clone(),
         );
-
-        // Register PRIMARY metrics for individual ping results (fine-grained data)
         registry.register(
             "http_ping_response_time_us",
-            "Individual HTTP ping response time in us - updates with each ping",
+            "HTTP ping response time in us - updates with each ping",
             http_ping_response_time_us.clone(),
         );
         registry.register(
             "tcp_ping_response_time_us",
-            "Individual TCP ping response time in us - updates with each ping",
+            "TCP ping response time in us - updates with each ping",
             tcp_ping_response_time_us.clone(),
         );
         registry.register(
             "tcp_ping_resolve_time_us",
-            "Individual TCP ping resolve time in us - updates with each ping",
+            "TCP ping resolve time in us - updates with each ping",
             tcp_ping_resolve_time_us.clone(),
+        );
+        registry.register(
+            "resolve_time_us",
+            "DNS resolve time - present when DNS is timed",
+            resolve_time_us.clone(),
+        );
+        registry.register(
+            "resolve_failure",
+            "DNS resolution error count - present when DNS is timed",
+            resolve_failure.clone(),
         );
 
         Self {
@@ -89,8 +137,9 @@ impl Default for PingMetrics {
             http_ping_failure,
             http_ping_response_time_us,
             tcp_ping_response_time_us,
-            tcp_ping_resolve_time_us,
             tcp_ping_failure,
+            resolve_time_us,
+            resolve_failure,
         }
     }
 }
@@ -103,7 +152,7 @@ impl PingMetrics {
         if let http_pinger::PingResult::Success { response_time, .. } = &response.result {
             self.http_ping_response_time_us
                 .get_or_create(&label)
-                .set(response_time.as_micros() as i64);
+                .observe(response_time.as_micros() as f64);
         } else {
             // Record failure count
             self.http_ping_failure.get_or_create(&label).inc();
@@ -115,31 +164,16 @@ impl PingMetrics {
 
         // Record duration if available - convert to us for higher precision
         if let tcp_pinger::TcpPingResponse::Success {
-            established_time,
-            resolve_time,
-            ..
+            established_time, ..
         } = &result.response
         {
-            // NEW: Record current TCP response time
             self.tcp_ping_response_time_us
                 .get_or_create(&label)
-                .set(established_time.as_micros() as i64);
-            if let Some(resolve_time) = resolve_time {
-                self.tcp_ping_resolve_time_us
-                    .get_or_create(&label)
-                    .set(resolve_time.as_micros() as i64);
-            }
+                .observe(established_time.as_micros() as f64);
         } else {
             // Record failure count
             self.tcp_ping_failure.get_or_create(&label).inc();
         }
-    }
-
-    // NEW: Get current response times
-    pub async fn get_current_response_times(&self) -> std::collections::HashMap<String, u64> {
-        // This would require iterating through gauge families, which is complex
-        // For now, return a simple response
-        std::collections::HashMap::new()
     }
 }
 impl From<http_pinger::PingResponse> for HttpPingLabel {
@@ -152,26 +186,21 @@ impl From<http_pinger::PingResponse> for HttpPingLabel {
             ..
         } = response;
         let response = match &result {
-            http_pinger::PingResult::Success { .. } => PingResponse::Success,
-            http_pinger::PingResult::Failure(_) => PingResponse::Failure,
-            http_pinger::PingResult::Timeout => PingResponse::Timeout,
+            http_pinger::PingResult::Success { .. } => PingStatus::Success,
+            http_pinger::PingResult::Failure(_) => PingStatus::Failure,
+            http_pinger::PingResult::Timeout => PingStatus::Timeout,
         };
 
-        let (version, status_code) = match result {
-            http_pinger::PingResult::Success {
-                version,
-                http_status,
-                ..
-            } => (Some(format!("{:?}", version)), Some(http_status as u32)),
-            _ => (None, None),
+        let status_code = match result {
+            http_pinger::PingResult::Success { http_status, .. } => Some(http_status as u32),
+            _ => None,
         };
 
         HttpPingLabel {
             url,
             method: method.to_string(),
             ip,
-            response,
-            version,
+            status: response,
             status_code,
         }
     }
@@ -182,7 +211,6 @@ impl From<tcp_pinger::TcpPingResult> for TcpPingLabel {
         let tcp_pinger::TcpPingResult {
             address: (host, port),
             resolved_ip,
-            newly_resolved,
             response,
             ..
         } = result;
@@ -190,11 +218,10 @@ impl From<tcp_pinger::TcpPingResult> for TcpPingLabel {
             host: String::from(host.to_str()),
             port: port.into(),
             resolved_ip: resolved_ip.to_string(),
-            newly_resolved,
             response: match response {
-                tcp_pinger::TcpPingResponse::Success { .. } => PingResponse::Success,
-                tcp_pinger::TcpPingResponse::Failure(_) => PingResponse::Failure,
-                tcp_pinger::TcpPingResponse::Timeout => PingResponse::Timeout,
+                tcp_pinger::TcpPingResponse::Success { .. } => PingStatus::Success,
+                tcp_pinger::TcpPingResponse::Failure(_) => PingStatus::Failure,
+                tcp_pinger::TcpPingResponse::Timeout => PingStatus::Timeout,
             },
         }
     }

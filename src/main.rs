@@ -1,14 +1,12 @@
 use crate::config::{HttpPinger, PingerConfig};
+use crate::http_pinger::AsyncHttpPinger;
 use crate::http_pinger::hyper_pinger::HyperPinger;
 use crate::http_pinger::reqwest_pinger::ReqwestPinger;
-use crate::http_pinger::AsyncHttpPinger;
-use crate::metric::PingMetrics;
-use crate::metrics_server::{start_metrics_server, SharedMetrics};
+use crate::metric::{PingMetrics, SharedMetrics};
+use crate::metrics_server::start_metrics_server;
 use crate::tcp_pinger::TcpPinger;
 use anyhow::Result;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::TokioConnectionProvider;
-use hickory_resolver::Resolver;
+use resolver::Resolve;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -17,6 +15,7 @@ mod config;
 mod http_pinger;
 mod metric;
 mod metrics_server;
+mod resolver;
 mod tcp_pinger;
 
 // Enum to hold different HTTP pinger types
@@ -32,15 +31,6 @@ impl HttpPingerImpl {
             HttpPingerImpl::Reqwest(pinger) => pinger.ping().await,
         }
     }
-}
-
-fn build_resolver() -> Resolver<TokioConnectionProvider> {
-    let mut options = ResolverOpts::default();
-    options.cache_size = 0; // Disable caching for testing purposes
-
-    Resolver::builder_with_config(ResolverConfig::new(), TokioConnectionProvider::default())
-        .with_options(options)
-        .build()
 }
 
 async fn load_config() -> Result<PingerConfig> {
@@ -63,13 +53,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let host = config.metrics.host.clone();
         let port = config.metrics.port;
         tokio::spawn(async move {
-            if let Err(e) = start_metrics_server(metrics_clone, &host, port).await {
-                eprintln!("Metrics server error: {}", e);
-            }
+            start_metrics_server(metrics_clone, &host, port)
+                .await
+                .unwrap()
         })
     };
 
-    let resolver = build_resolver();
+    let resolver = resolver::build_resolver(&config, Arc::clone(&metrics));
     let mut ping_tasks: Vec<JoinHandle<()>> = Vec::new();
 
     // Create HTTP ping tasks
@@ -80,16 +70,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for entry in config.http.entries {
             let pinger_result = match config.http.pinger {
                 HttpPinger::Hyper => {
-                    HyperPinger::new(entry, http_timeout).map(HttpPingerImpl::Hyper)
+                    HyperPinger::new(entry, http_timeout, Arc::clone(&resolver) as _)
+                        .map(HttpPingerImpl::Hyper)
                 }
                 HttpPinger::Reqwest => {
-                    ReqwestPinger::new(entry, http_timeout).map(HttpPingerImpl::Reqwest)
+                    ReqwestPinger::new(entry, http_timeout, Arc::clone(&resolver) as _)
+                        .map(HttpPingerImpl::Reqwest)
                 }
             };
 
             match pinger_result {
                 Ok(pinger) => {
-                    let metrics_clone = Arc::clone(&metrics);
+                    let metrics_clone: SharedMetrics = Arc::clone(&metrics);
                     let task = tokio::spawn(async move {
                         loop {
                             match pinger.ping().await {
@@ -119,15 +111,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tcp_interval = Duration::from_millis(config.tcp.interval_millis);
 
         for entry in config.tcp.entries {
-            match TcpPinger::new(entry, tcp_timeout, resolver.clone()).await {
+            match TcpPinger::new(
+                entry,
+                tcp_timeout,
+                config.measure_dns_stats,
+                resolver.clone(),
+            )
+            .await
+            {
                 Ok(pinger) => {
-                    let metrics_clone = Arc::clone(&metrics);
+                    let metrics_clone: SharedMetrics = Arc::clone(&metrics);
                     let task = tokio::spawn(async move {
                         loop {
                             match pinger.ping().await {
                                 Ok(response) => {
                                     println!("TCP Ping response: {:?}", response);
-                                    metrics_clone.record_tcp_ping(&response);
+                                    metrics_clone.as_ref().record_tcp_ping(&response);
                                 }
                                 Err(e) => {
                                     eprintln!("TCP Ping error: {}", e);
