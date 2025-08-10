@@ -1,10 +1,12 @@
 use crate::config::HttpPingerEntry;
 use crate::http_pinger::{AsyncHttpPinger, PingResponse, PingResult};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use http_body_util::Empty;
 use hyper::body::{Body, Bytes, Incoming};
 use hyper::{Method, Request, Response, Version};
 use hyper_util::rt::TokioIo;
+use reqwest::dns::{Name, Resolve};
 use std::net::SocketAddr;
 use std::ops::Add;
 use std::pin::Pin;
@@ -13,17 +15,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
+use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-use tokio_rustls::TlsConnector;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct HyperPinger {
     url: url::Url,
-    address: String,
+    port: u16,
     method: Method,
     timeout: Duration,
     tls_config: Arc<ClientConfig>,
+    resolver: Arc<dyn Resolve>,
 }
 
 struct Connect {
@@ -34,20 +37,30 @@ struct Connect {
 }
 
 impl HyperPinger {
+    async fn resolve(&self) -> anyhow::Result<SocketAddr> {
+        let host = self.url.host().unwrap().to_string();
+        let mut addr = match self.resolver.resolve(Name::from_str(&host)?).await {
+            Ok(mut iter) => Ok(iter.next().unwrap()),
+            Err(e) => Err(anyhow!(e)),
+        }?;
+        addr.set_port(self.port);
+        Ok(addr)
+    }
+
     async fn connect_tls<B>(&self, req: Request<B>) -> anyhow::Result<Connect>
     where
         B: Body + Send + 'static,
         <B as Body>::Error: std::error::Error + Send + Sync + 'static,
         <B as Body>::Data: Send + Sync + 'static,
     {
-        let host = self.url.host().unwrap().to_owned();
+        let addr = self.resolve().await?;
         let connector = TlsConnector::from(self.tls_config.clone());
 
         let begin = Instant::now();
-        let dns_name = ServerName::try_from(host.to_string())?;
-        let tcp = TcpStream::connect(&self.address).await?;
+        let tcp = TcpStream::connect(&addr).await?;
         let peer_address = tcp.peer_addr()?;
-        let stream = connector.connect(dns_name, tcp).await?;
+        let host = self.url.host_str().unwrap().to_string();
+        let stream = connector.connect(ServerName::try_from(host)?, tcp).await?;
 
         let io = TokioIo::new(stream);
         let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
@@ -69,8 +82,9 @@ impl HyperPinger {
         <B as Body>::Error: std::error::Error + Send + Sync + 'static,
         <B as Body>::Data: Send + Sync + 'static,
     {
+        let addr = self.resolve().await?;
         let begin = Instant::now();
-        let tcp = TcpStream::connect(&self.address).await?;
+        let tcp = TcpStream::connect(&addr).await?;
         let peer_address = tcp.peer_addr()?;
         let io = TokioIo::new(tcp);
         let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
@@ -140,7 +154,7 @@ impl HyperPinger {
 #[async_trait]
 impl AsyncHttpPinger for HyperPinger {
     async fn ping(&self) -> anyhow::Result<PingResponse> {
-        use tokio::time::{timeout_at, Instant as TokioInstant};
+        use tokio::time::{Instant as TokioInstant, timeout_at};
 
         let begin = Instant::now();
         let result = timeout_at(
@@ -163,14 +177,15 @@ impl AsyncHttpPinger for HyperPinger {
     fn new(
         HttpPingerEntry { url, method }: HttpPingerEntry,
         timeout: Duration,
+        resolver: Arc<dyn Resolve>,
     ) -> anyhow::Result<Self> {
         let method = Method::from_str(&method)
             .map_err(|e| anyhow::anyhow!("Invalid HTTP method: {}: {}", method, e))?;
         let url = url.trim().to_string().parse::<url::Url>()?;
-        let host = url
-            .host()
-            .map(|h| h.to_string())
-            .ok_or_else(|| anyhow::anyhow!("Invalid URL: Host is missing in {}", url))?;
+        if url.host_str().is_none() {
+            anyhow::bail!("Invalid URL: Host is missing in {}", url);
+        }
+
         let port = match url.port_or_known_default() {
             Some(p) => p,
             None => return Err(anyhow::anyhow!("Unsupported URL scheme: {}", url.scheme())),
@@ -185,15 +200,12 @@ impl AsyncHttpPinger for HyperPinger {
 
         Ok(HyperPinger {
             url,
-            address: format!("{}:{}", host, port),
+            port,
             method,
             timeout,
             tls_config: Arc::new(config),
+            resolver,
         })
-    }
-
-    fn address(&self) -> &str {
-        &self.address
     }
 
     fn url(&self) -> &url::Url {

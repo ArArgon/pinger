@@ -2,21 +2,21 @@ pub mod hyper_pinger;
 pub mod reqwest_pinger;
 
 use crate::config::HttpPingerEntry;
+use crate::resolver::Resolve;
 use anyhow::Result;
 use async_trait::async_trait;
 use hyper::Method;
 use std::fmt::Display;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[async_trait]
 pub trait AsyncHttpPinger {
     async fn ping(&self) -> Result<PingResponse>;
 
-    fn new(entry: HttpPingerEntry, timeout: Duration) -> Result<Self>
+    fn new(entry: HttpPingerEntry, timeout: Duration, resolver: Arc<dyn Resolve>) -> Result<Self>
     where
         Self: Sized;
-
-    fn address(&self) -> &str;
 
     fn url(&self) -> &url::Url;
 

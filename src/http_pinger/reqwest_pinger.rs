@@ -2,8 +2,10 @@ use crate::config::HttpPingerEntry;
 use crate::http_pinger::{AsyncHttpPinger, PingResponse, PingResult};
 use async_trait::async_trait;
 use hyper::Method;
+use reqwest::dns::Resolve;
 use reqwest::redirect::Policy;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -63,6 +65,7 @@ impl AsyncHttpPinger for ReqwestPinger {
     fn new(
         HttpPingerEntry { url, method }: HttpPingerEntry,
         timeout: Duration,
+        resolver: Arc<dyn Resolve>,
     ) -> anyhow::Result<Self> {
         let method = Method::from_str(&method)
             .map_err(|e| anyhow::anyhow!("Invalid HTTP method: {}: {}", method, e))?;
@@ -79,6 +82,8 @@ impl AsyncHttpPinger for ReqwestPinger {
         let builder = reqwest::Client::builder()
             .connect_timeout(timeout)
             .pool_max_idle_per_host(0)
+            .no_hickory_dns()
+            .dns_resolver_dyn(resolver)
             .redirect(Policy::none());
 
         Ok(ReqwestPinger {
@@ -88,10 +93,6 @@ impl AsyncHttpPinger for ReqwestPinger {
             timeout,
             reqwest_client: builder.build()?,
         })
-    }
-
-    fn address(&self) -> &str {
-        &self.address
     }
 
     fn url(&self) -> &url::Url {

@@ -23,7 +23,6 @@ pub struct HttpPingerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpPingerEntry {
-    pub always_resolve: bool,
     pub host: String,
     pub port: u16,
 }
@@ -47,4 +46,6 @@ pub struct PingerConfig {
     pub http: HttpPingerConfig,
     pub tcp: TcpPingerConfig,
     pub metrics: MetricsServerConfig,
+    pub dns_timeout_millis: u64,
+    pub measure_dns_stats: bool,
 }
