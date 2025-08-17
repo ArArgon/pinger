@@ -16,6 +16,7 @@ pub enum PingStatus {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelValue)]
+#[allow(dead_code)]
 pub enum FailureType {
     Dns,
     Other,
@@ -31,6 +32,7 @@ pub struct HttpPingLabel {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+#[allow(dead_code)]
 pub struct HttpPingFailureLabel {
     pub url: String,
     pub method: String,
@@ -38,6 +40,7 @@ pub struct HttpPingFailureLabel {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+#[allow(dead_code)]
 pub struct TcpPingLabel {
     pub host: String,
     pub port: u32,
@@ -46,6 +49,7 @@ pub struct TcpPingLabel {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+#[allow(dead_code)]
 pub struct TcpPingFailureLabel {
     pub host: String,
     pub port: u32,

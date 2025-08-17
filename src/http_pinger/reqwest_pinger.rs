@@ -12,7 +12,6 @@ use tracing::instrument;
 #[derive(Debug, Clone)]
 pub(crate) struct ReqwestPinger {
     url: url::Url,
-    address: String,
     method: Method,
     timeout: Duration,
     reqwest_client: reqwest::Client,
@@ -73,14 +72,13 @@ impl AsyncHttpPinger for ReqwestPinger {
         let method = Method::from_str(&method)
             .map_err(|e| anyhow::anyhow!("Invalid HTTP method: {}: {}", method, e))?;
         let url = url.trim().to_string().parse::<url::Url>()?;
-        let host = url
-            .host()
-            .map(|h| h.to_string())
-            .ok_or_else(|| anyhow::anyhow!("Invalid URL: Host is missing in {}", url))?;
-        let port = match url.port_or_known_default() {
-            Some(p) => p,
-            None => return Err(anyhow::anyhow!("Unsupported URL scheme: {}", url.scheme())),
-        };
+
+        if url.host().is_none() {
+            return Err(anyhow::anyhow!("Invalid URL: Host is missing in {}", url));
+        }
+        if url.port_or_known_default().is_none() {
+            return Err(anyhow::anyhow!("Unsupported URL scheme: {}", url));
+        }
 
         let builder = reqwest::Client::builder()
             .connect_timeout(timeout)
@@ -91,7 +89,6 @@ impl AsyncHttpPinger for ReqwestPinger {
 
         Ok(ReqwestPinger {
             url,
-            address: format!("{}:{}", host, port),
             method,
             timeout,
             reqwest_client: builder.build()?,

@@ -34,6 +34,7 @@ pub trait AsyncHttpPinger {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PingResponse {
     pub url: String,
     pub ip: Option<String>,
@@ -43,6 +44,7 @@ pub struct PingResponse {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum PingResult {
     Success {
         http_status: u16,

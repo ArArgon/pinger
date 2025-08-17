@@ -10,6 +10,7 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tracing::instrument;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TcpPingResult {
     pub address: (ServerName<'static>, u16),
     pub resolved_ip: IpAddr,
@@ -18,6 +19,7 @@ pub struct TcpPingResult {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum TcpPingResponse {
     Success {
         endpoint: SocketAddr,

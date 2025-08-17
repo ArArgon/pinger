@@ -14,13 +14,10 @@ use tokio::task::JoinHandle;
 use tracing::{error, info};
 
 mod config;
-#[allow(dead_code)]
 mod http_pinger;
-#[allow(dead_code)]
 mod metric;
 mod metrics_server;
 mod resolver;
-#[allow(dead_code)]
 mod tcp_pinger;
 
 /// Enum to hold different HTTP pinger types
