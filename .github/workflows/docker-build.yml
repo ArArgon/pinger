@@ -31,7 +31,7 @@ jobs:
           toolchain: stable
           profile: minimal
           override: true
-          components: clippy, rustfmt, audit
+          components: clippy, rustfmt
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
@@ -46,7 +46,12 @@ jobs:
         run: cargo test --all-features
 
       - name: Check for security vulnerabilities
-        run: cargo audit
+        run: |
+          # Install cargo-audit if not available
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install cargo-audit --features=fix
+          fi
+          cargo audit
 
       - name: Format Rust code (optional)
         if: failure()
