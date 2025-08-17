@@ -83,7 +83,7 @@ impl AsyncHttpPinger for ReqwestPinger {
             .connect_timeout(timeout)
             .pool_max_idle_per_host(0)
             .no_hickory_dns()
-            .dns_resolver_dyn(resolver)
+            .dns_resolver2(resolver)
             .redirect(Policy::none());
 
         Ok(ReqwestPinger {
