@@ -55,6 +55,7 @@ pub struct ResolveLabel {
     pub host: String,
 }
 
+#[derive(Debug)]
 pub struct PingMetrics {
     pub registry: Registry,
 

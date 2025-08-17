@@ -1,12 +1,13 @@
 use crate::config::HttpPingerEntry;
 use crate::http_pinger::{AsyncHttpPinger, PingResponse, PingResult};
+use crate::resolver::Resolve;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use http_body_util::Empty;
 use hyper::body::{Body, Bytes, Incoming};
 use hyper::{Method, Request, Response, Version};
 use hyper_util::rt::TokioIo;
-use reqwest::dns::{Name, Resolve};
+use reqwest::dns::Name;
 use std::net::SocketAddr;
 use std::ops::Add;
 use std::pin::Pin;
@@ -18,8 +19,9 @@ use tokio::task::JoinHandle;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tracing::instrument;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct HyperPinger {
     url: url::Url,
     port: u16,
@@ -37,6 +39,7 @@ struct Connect {
 }
 
 impl HyperPinger {
+    #[instrument]
     async fn resolve(&self) -> anyhow::Result<SocketAddr> {
         let host = self.url.host().unwrap().to_string();
         let mut addr = match self.resolver.resolve(Name::from_str(&host)?).await {
@@ -47,6 +50,7 @@ impl HyperPinger {
         Ok(addr)
     }
 
+    #[instrument(skip(req), fields(req.uri))]
     async fn connect_tls<B>(&self, req: Request<B>) -> anyhow::Result<Connect>
     where
         B: Body + Send + 'static,
@@ -108,6 +112,7 @@ impl HyperPinger {
             .body(Empty::<Bytes>::new())?)
     }
 
+    #[instrument]
     async fn ping_inner(&self) -> anyhow::Result<PingResponse> {
         let req = self.build_request()?;
         let conn_result = if self.url.scheme() == "https" {
@@ -153,6 +158,7 @@ impl HyperPinger {
 
 #[async_trait]
 impl AsyncHttpPinger for HyperPinger {
+    #[instrument]
     async fn ping(&self) -> anyhow::Result<PingResponse> {
         use tokio::time::{Instant as TokioInstant, timeout_at};
 
