@@ -65,6 +65,7 @@ fn create_http_ping_task(
     match pinger_result {
         Ok(pinger) => {
             let task = tokio::spawn(async move {
+                let mut tick = tokio::time::interval(interval);
                 loop {
                     match pinger.ping().await {
                         Ok(response) => {
@@ -75,7 +76,7 @@ fn create_http_ping_task(
                             error!("HTTP Ping error: {}", e);
                         }
                     }
-                    tokio::time::sleep(interval).await;
+                    tick.tick().await;
                 }
             });
             Ok(task)
@@ -155,6 +156,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let http_timeout = Duration::from_millis(config.http.timeout_millis);
         let http_interval = Duration::from_millis(config.http.interval_millis);
 
+        if http_interval < http_timeout {
+            error!("HTTP interval is less than timeout, which is not allowed");
+            return Err("HTTP interval is less than timeout, which is not allowed".into());
+        }
+
         for entry in config.http.entries {
             match create_http_ping_task(
                 entry,
@@ -174,6 +180,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !config.tcp.entries.is_empty() {
         let tcp_timeout = Duration::from_millis(config.tcp.timeout_millis);
         let tcp_interval = Duration::from_millis(config.tcp.interval_millis);
+
+        if tcp_interval < tcp_timeout {
+            error!("TCP interval is less than timeout, which is not allowed");
+            return Err("TCP interval is less than timeout, which is not allowed".into());
+        }
 
         for entry in config.tcp.entries {
             match create_tcp_ping_task(

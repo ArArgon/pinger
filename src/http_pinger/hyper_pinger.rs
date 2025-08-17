@@ -39,7 +39,7 @@ struct Connect {
 }
 
 impl HyperPinger {
-    #[instrument]
+    #[instrument(fields(url = %self.url, method = %self.method), skip(self))]
     async fn resolve(&self) -> anyhow::Result<SocketAddr> {
         let host = self.url.host().unwrap().to_string();
         let mut addr = match self.resolver.resolve(Name::from_str(&host)?).await {
@@ -50,7 +50,7 @@ impl HyperPinger {
         Ok(addr)
     }
 
-    #[instrument(skip(req), fields(req.uri))]
+    #[instrument(fields(url = %self.url, method = %self.method), skip(self, req))]
     async fn connect_tls<B>(&self, req: Request<B>) -> anyhow::Result<Connect>
     where
         B: Body + Send + 'static,
@@ -80,6 +80,7 @@ impl HyperPinger {
         })
     }
 
+    #[instrument(fields(url = %self.url, method = %self.method), skip(self, req))]
     async fn connect_http<B>(&self, req: Request<B>) -> anyhow::Result<Connect>
     where
         B: Body + Send + 'static,
@@ -112,7 +113,7 @@ impl HyperPinger {
             .body(Empty::<Bytes>::new())?)
     }
 
-    #[instrument]
+    #[instrument(fields(url = %self.url, method = %self.method), skip(self))]
     async fn ping_inner(&self) -> anyhow::Result<PingResponse> {
         let req = self.build_request()?;
         let conn_result = if self.url.scheme() == "https" {
@@ -158,7 +159,7 @@ impl HyperPinger {
 
 #[async_trait]
 impl AsyncHttpPinger for HyperPinger {
-    #[instrument]
+    #[instrument(fields(url = %self.url, method = %self.method), skip(self))]
     async fn ping(&self) -> anyhow::Result<PingResponse> {
         use tokio::time::{Instant as TokioInstant, timeout_at};
 

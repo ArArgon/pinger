@@ -19,7 +19,7 @@ pub(crate) struct ReqwestPinger {
 }
 
 impl ReqwestPinger {
-    #[instrument]
+    #[instrument(fields(url = %self.url, method = %self.method), skip(self))]
     async fn ping_inner(&self) -> anyhow::Result<PingResponse> {
         let builder = self
             .reqwest_client
@@ -48,7 +48,7 @@ impl ReqwestPinger {
 
 #[async_trait]
 impl AsyncHttpPinger for ReqwestPinger {
-    #[instrument]
+    #[instrument(fields(url = %self.url, method = %self.method), skip(self))]
     async fn ping(&self) -> anyhow::Result<PingResponse> {
         use tokio::time::timeout;
         let task_submission_time = Instant::now();

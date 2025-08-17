@@ -62,7 +62,7 @@ impl TcpPinger {
         })
     }
 
-    #[instrument]
+    #[instrument(fields(host = %self.host.to_str(), port = %self.port), skip(self))]
     async fn resolve_addr(&self) -> Result<IpAddr> {
         let host = &self.host;
 
@@ -104,7 +104,7 @@ impl TcpPinger {
         })
     }
 
-    #[instrument]
+    #[instrument(fields(host = %self.host.to_str(), port = %self.port), skip(self))]
     async fn ping_inner(&self) -> Result<TcpPingResult> {
         let mut resolve_time: Option<Duration> = None;
         let begin = Instant::now();
@@ -141,7 +141,7 @@ impl TcpPinger {
         })
     }
 
-    #[instrument]
+    #[instrument(fields(host = %self.host.to_str(), port = %self.port), skip(self))]
     pub async fn ping(&self) -> Result<TcpPingResult> {
         let task_submission_time = Instant::now();
         let result =

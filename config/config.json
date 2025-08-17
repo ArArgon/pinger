@@ -2,8 +2,8 @@
   "http": {
     "pinger": "Reqwest",
     "retries": 2,
-    "timeout_millis": 5000,
-    "interval_millis": 2000,
+    "timeout_millis": 2000,
+    "interval_millis": 5000,
     "entries": [
       {
         "url": "https://www.google.com/",
@@ -17,7 +17,7 @@
   },
   "tcp": {
     "retries": 1,
-    "timeout_millis": 3000,
+    "timeout_millis": 2000,
     "interval_millis": 2000,
     "entries": [
       {

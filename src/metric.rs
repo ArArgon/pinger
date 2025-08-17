@@ -1,4 +1,6 @@
 use crate::{http_pinger, tcp_pinger};
+use hickory_resolver::proto::ProtoErrorKind;
+use hickory_resolver::{ResolveError, ResolveErrorKind};
 use prometheus_client::encoding::{EncodeLabelSet, EncodeLabelValue};
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
@@ -55,6 +57,20 @@ pub struct ResolveLabel {
     pub host: String,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ResolveErrorLabel {
+    pub host: String,
+    pub error_type: ResolveErrorType,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelValue)]
+pub enum ResolveErrorType {
+    NoRecordsFound,
+    NoResolverAvailable,
+    Timeout,
+    Other,
+}
+
 #[derive(Debug)]
 pub struct PingMetrics {
     pub registry: Registry,
@@ -69,7 +85,7 @@ pub struct PingMetrics {
 
     // DNS metrics
     pub resolve_time_us: Family<ResolveLabel, Histogram>,
-    pub resolve_failure: Family<ResolveLabel, Counter>,
+    pub resolve_failure: Family<ResolveErrorLabel, Counter>,
 }
 
 pub type SharedMetrics = Arc<PingMetrics>;
@@ -86,7 +102,7 @@ impl Default for PingMetrics {
 
         let http_ping_failure = Family::<HttpPingLabel, Counter>::default();
         let tcp_ping_failure = Family::<TcpPingLabel, Counter>::default();
-        let resolve_failure = Family::<ResolveLabel, Counter>::default();
+        let resolve_failure = Family::<ResolveErrorLabel, Counter>::default();
 
         let http_ping_response_time_us =
             Family::<HttpPingLabel, Histogram>::new_with_constructor(Self::default_histogram);
@@ -177,6 +193,7 @@ impl PingMetrics {
         }
     }
 }
+
 impl From<http_pinger::PingResponse> for HttpPingLabel {
     fn from(response: http_pinger::PingResponse) -> Self {
         let http_pinger::PingResponse {
@@ -224,6 +241,36 @@ impl From<tcp_pinger::TcpPingResult> for TcpPingLabel {
                 tcp_pinger::TcpPingResponse::Failure(_) => PingStatus::Failure,
                 tcp_pinger::TcpPingResponse::Timeout => PingStatus::Timeout,
             },
+        }
+    }
+}
+
+impl ResolveErrorType {
+    fn new(error: &(dyn std::error::Error + 'static)) -> Self {
+        match error.downcast_ref::<ResolveError>() {
+            Some(error) => {
+                match error.kind() {
+                    ResolveErrorKind::Proto(proto_error) => {
+                        match proto_error.kind() {
+                            ProtoErrorKind::NoRecordsFound { .. } => ResolveErrorType::NoRecordsFound,
+                            ProtoErrorKind::Timeout => ResolveErrorType::Timeout,
+                            ProtoErrorKind::NoConnections => ResolveErrorType::NoResolverAvailable,
+                            _ => ResolveErrorType::Other,
+                        }
+                    }
+                    _ => ResolveErrorType::Other,
+                }
+            }
+            _ => ResolveErrorType::Other,
+        }
+    }
+}
+
+impl ResolveErrorLabel {
+    pub fn new(label: ResolveLabel, error: &(dyn std::error::Error + 'static)) -> Self {
+        ResolveErrorLabel {
+            host: label.host,
+            error_type: ResolveErrorType::new(error),
         }
     }
 }
