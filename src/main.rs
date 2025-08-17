@@ -23,7 +23,7 @@ mod resolver;
 #[allow(dead_code)]
 mod tcp_pinger;
 
-// Enum to hold different HTTP pinger types
+/// Enum to hold different HTTP pinger types
 enum HttpPingerImpl {
     Hyper(HyperPinger),
     Reqwest(ReqwestPinger),
@@ -38,10 +38,87 @@ impl HttpPingerImpl {
     }
 }
 
-async fn load_config(config: &str) -> Result<PingerConfig> {
-    // Try to load from config file, fallback to default config
-    let config = tokio::fs::read_to_string(config).await?;
-    serde_json::from_str(&config).map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))
+/// Load configuration from file
+async fn load_config(config_path: &str) -> Result<PingerConfig> {
+    let config_content = tokio::fs::read_to_string(config_path).await?;
+    serde_json::from_str(&config_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))
+}
+
+/// Create HTTP ping task
+fn create_http_ping_task(
+    entry: crate::config::HttpPingerEntry,
+    timeout: Duration,
+    interval: Duration,
+    resolver: Arc<dyn Resolve>,
+    metrics: SharedMetrics,
+    pinger_type: HttpPinger,
+) -> Result<JoinHandle<()>> {
+    let pinger_result = match pinger_type {
+        HttpPinger::Hyper => {
+            HyperPinger::new(entry, timeout, Arc::clone(&resolver) as _).map(HttpPingerImpl::Hyper)
+        }
+        HttpPinger::Reqwest => ReqwestPinger::new(entry, timeout, Arc::clone(&resolver) as _)
+            .map(HttpPingerImpl::Reqwest),
+    };
+
+    match pinger_result {
+        Ok(pinger) => {
+            let task = tokio::spawn(async move {
+                loop {
+                    match pinger.ping().await {
+                        Ok(response) => {
+                            info!(name: "httping", "Response: {:?}", response);
+                            metrics.record_http_ping(&response);
+                        }
+                        Err(e) => {
+                            error!("HTTP Ping error: {}", e);
+                        }
+                    }
+                    tokio::time::sleep(interval).await;
+                }
+            });
+            Ok(task)
+        }
+        Err(e) => {
+            error!("Failed to create HTTP pinger: {}", e);
+            Err(anyhow::anyhow!("HTTP pinger creation failed: {}", e))
+        }
+    }
+}
+
+/// Create TCP ping task
+async fn create_tcp_ping_task(
+    entry: crate::config::TcpPingerEntry,
+    timeout: Duration,
+    interval: Duration,
+    measure_dns_stats: bool,
+    resolver: Arc<dyn Resolve>,
+    metrics: SharedMetrics,
+) -> Result<JoinHandle<()>> {
+    match TcpPinger::new(entry, timeout, measure_dns_stats, resolver).await {
+        Ok(pinger) => {
+            let task = tokio::spawn(async move {
+                loop {
+                    match pinger.ping().await {
+                        Ok(response) => {
+                            info!(name: "tcping", "Response: {:?}", response);
+                            metrics.record_tcp_ping(&response);
+                        }
+                        Err(e) => {
+                            error!("TCP Ping error: {}", e);
+                        }
+                    }
+                    tokio::time::sleep(interval).await;
+                }
+            });
+            Ok(task)
+        }
+        Err(e) => {
+            error!("Failed to create TCP pinger: {}", e);
+            Err(anyhow::anyhow!("TCP pinger creation failed: {}", e))
+        }
+    }
 }
 
 #[tokio::main]
@@ -58,11 +135,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize metrics
     let metrics: SharedMetrics = Arc::new(PingMetrics::default());
 
-    // Start metrics server in background with configurable host and port
+    // Start metrics server in background with CLI configurable host and port
     let metrics_server_handle = {
         let metrics_clone = Arc::clone(&metrics);
-        let host = config.metrics.host.clone();
-        let port = config.metrics.port;
+        let host = args.bind.clone();
+        let port = args.port;
         tokio::spawn(async move {
             start_metrics_server(metrics_clone, &host, port)
                 .await
@@ -79,39 +156,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let http_interval = Duration::from_millis(config.http.interval_millis);
 
         for entry in config.http.entries {
-            let pinger_result = match config.http.pinger {
-                HttpPinger::Hyper => {
-                    HyperPinger::new(entry, http_timeout, Arc::clone(&resolver) as _)
-                        .map(HttpPingerImpl::Hyper)
-                }
-                HttpPinger::Reqwest => {
-                    ReqwestPinger::new(entry, http_timeout, Arc::clone(&resolver) as _)
-                        .map(HttpPingerImpl::Reqwest)
-                }
-            };
-
-            match pinger_result {
-                Ok(pinger) => {
-                    let metrics_clone: SharedMetrics = Arc::clone(&metrics);
-                    let task = tokio::spawn(async move {
-                        loop {
-                            match pinger.ping().await {
-                                Ok(response) => {
-                                    info!(name: "httping", "Response: {:?}", response);
-                                    metrics_clone.record_http_ping(&response);
-                                }
-                                Err(e) => {
-                                    error!("HTTP Ping error: {}", e);
-                                }
-                            }
-                            tokio::time::sleep(http_interval).await;
-                        }
-                    });
-                    ping_tasks.push(task);
-                }
-                Err(e) => {
-                    error!("Failed to create HTTP pinger: {}", e);
-                }
+            match create_http_ping_task(
+                entry,
+                http_timeout,
+                http_interval,
+                Arc::clone(&resolver),
+                Arc::clone(&metrics),
+                config.http.pinger,
+            ) {
+                Ok(task) => ping_tasks.push(task),
+                Err(e) => error!("Failed to create HTTP ping task: {}", e),
             }
         }
     }
@@ -122,35 +176,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tcp_interval = Duration::from_millis(config.tcp.interval_millis);
 
         for entry in config.tcp.entries {
-            match TcpPinger::new(
+            match create_tcp_ping_task(
                 entry,
                 tcp_timeout,
+                tcp_interval,
                 config.measure_dns_stats,
-                resolver.clone(),
+                Arc::clone(&resolver),
+                Arc::clone(&metrics),
             )
             .await
             {
-                Ok(pinger) => {
-                    let metrics_clone: SharedMetrics = Arc::clone(&metrics);
-                    let task = tokio::spawn(async move {
-                        loop {
-                            match pinger.ping().await {
-                                Ok(response) => {
-                                    info!(name: "tcping", "Response: {:?}", response);
-                                    metrics_clone.as_ref().record_tcp_ping(&response);
-                                }
-                                Err(e) => {
-                                    error!("TCP Ping error: {}", e);
-                                }
-                            }
-                            tokio::time::sleep(tcp_interval).await;
-                        }
-                    });
-                    ping_tasks.push(task);
-                }
-                Err(e) => {
-                    error!("Failed to create TCP pinger: {}", e);
-                }
+                Ok(task) => ping_tasks.push(task),
+                Err(e) => error!("Failed to create TCP ping task: {}", e),
             }
         }
     }
@@ -158,7 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Started {} ping tasks", ping_tasks.len());
     println!(
         "Metrics server running on http://{}:{}/metrics",
-        config.metrics.host, config.metrics.port
+        args.bind, args.port
     );
 
     // Wait for all tasks (runs indefinitely)

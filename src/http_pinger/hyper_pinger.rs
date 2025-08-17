@@ -70,7 +70,7 @@ impl HyperPinger {
         let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
 
         // Spawn the connection future to handle incoming responses
-        let handle = tokio::spawn(async move { conn.await });
+        let handle = tokio::spawn(conn);
         let res = sender.send_request(req);
         Ok(Connect {
             begin,
@@ -94,7 +94,7 @@ impl HyperPinger {
         let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
 
         // Spawn the connection future to handle incoming responses
-        let handle = tokio::spawn(async move { conn.await });
+        let handle = tokio::spawn(conn);
         let res = sender.send_request(req);
         Ok(Connect {
             begin,

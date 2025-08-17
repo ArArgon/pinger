@@ -1,0 +1,5 @@
+[alias]
+# Useful cargo aliases
+check-all = "check --all-features"
+test-all = "test --all-features"
+build-release = "build --release"

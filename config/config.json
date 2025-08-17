@@ -8,6 +8,10 @@
       {
         "url": "https://www.google.com/",
         "method": "HEAD"
+      },
+      {
+        "url": "https://api.github.com/status",
+        "method": "GET"
       }
     ]
   },
@@ -25,10 +29,6 @@
         "port": 80
       }
     ]
-  },
-  "metrics": {
-    "host": "0.0.0.0",
-    "port": 3000
   },
   "measure_dns_stats": true,
   "dns_timeout_millis": 1000

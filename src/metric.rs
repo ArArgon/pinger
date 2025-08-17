@@ -15,7 +15,7 @@ pub enum PingStatus {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelValue)]
 pub enum FailureType {
-    DNS,
+    Dns,
     Other,
 }
 
