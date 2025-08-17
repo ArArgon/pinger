@@ -1,4 +1,4 @@
-use crate::config::{HttpPinger, PingerConfig};
+use crate::config::{Args, HttpPinger, PingerConfig};
 use crate::http_pinger::AsyncHttpPinger;
 use crate::http_pinger::hyper_pinger::HyperPinger;
 use crate::http_pinger::reqwest_pinger::ReqwestPinger;
@@ -6,16 +6,21 @@ use crate::metric::{PingMetrics, SharedMetrics};
 use crate::metrics_server::start_metrics_server;
 use crate::tcp_pinger::TcpPinger;
 use anyhow::Result;
+use clap::Parser;
 use resolver::Resolve;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use tracing::{error, info};
 
 mod config;
+#[allow(dead_code)]
 mod http_pinger;
+#[allow(dead_code)]
 mod metric;
 mod metrics_server;
 mod resolver;
+#[allow(dead_code)]
 mod tcp_pinger;
 
 // Enum to hold different HTTP pinger types
@@ -33,16 +38,22 @@ impl HttpPingerImpl {
     }
 }
 
-async fn load_config() -> Result<PingerConfig> {
+async fn load_config(config: &str) -> Result<PingerConfig> {
     // Try to load from config file, fallback to default config
-    let config = tokio::fs::read_to_string("config.json").await?;
+    let config = tokio::fs::read_to_string(config).await?;
     serde_json::from_str(&config).map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
+    if args.debug {
+        tracing_subscriber::fmt::init();
+    }
+
     // Load configuration
-    let config = load_config().await?;
+    let config = load_config(&args.config).await?;
 
     // Initialize metrics
     let metrics: SharedMetrics = Arc::new(PingMetrics::default());
@@ -59,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
-    let resolver = resolver::build_resolver(&config, Arc::clone(&metrics));
+    let resolver = resolver::build_resolver(&config, Arc::clone(&metrics))?;
     let mut ping_tasks: Vec<JoinHandle<()>> = Vec::new();
 
     // Create HTTP ping tasks
@@ -86,11 +97,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         loop {
                             match pinger.ping().await {
                                 Ok(response) => {
-                                    println!("HTTP Ping response: {:?}", response);
+                                    info!(name: "httping", "Response: {:?}", response);
                                     metrics_clone.record_http_ping(&response);
                                 }
                                 Err(e) => {
-                                    eprintln!("HTTP Ping error: {}", e);
+                                    error!("HTTP Ping error: {}", e);
                                 }
                             }
                             tokio::time::sleep(http_interval).await;
@@ -99,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ping_tasks.push(task);
                 }
                 Err(e) => {
-                    eprintln!("Failed to create HTTP pinger: {}", e);
+                    error!("Failed to create HTTP pinger: {}", e);
                 }
             }
         }
@@ -125,11 +136,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         loop {
                             match pinger.ping().await {
                                 Ok(response) => {
-                                    println!("TCP Ping response: {:?}", response);
+                                    info!(name: "tcping", "Response: {:?}", response);
                                     metrics_clone.as_ref().record_tcp_ping(&response);
                                 }
                                 Err(e) => {
-                                    eprintln!("TCP Ping error: {}", e);
+                                    error!("TCP Ping error: {}", e);
                                 }
                             }
                             tokio::time::sleep(tcp_interval).await;
@@ -138,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ping_tasks.push(task);
                 }
                 Err(e) => {
-                    eprintln!("Failed to create TCP pinger: {}", e);
+                    error!("Failed to create TCP pinger: {}", e);
                 }
             }
         }

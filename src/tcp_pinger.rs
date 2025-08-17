@@ -1,11 +1,13 @@
 use crate::config::TcpPingerEntry;
 use crate::resolver::{Resolve, resolve_str};
 use anyhow::Result;
+use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpSocket;
 use tokio_rustls::rustls::pki_types::ServerName;
+use tracing::instrument;
 
 #[derive(Debug, Clone)]
 pub struct TcpPingResult {
@@ -32,6 +34,7 @@ enum ResolvePolicy {
     Resolved(IpAddr),
 }
 
+#[derive(Debug)]
 pub struct TcpPinger {
     host: ServerName<'static>,
     port: u16,
@@ -59,6 +62,7 @@ impl TcpPinger {
         })
     }
 
+    #[instrument]
     async fn resolve_addr(&self) -> Result<IpAddr> {
         let host = &self.host;
 
@@ -100,6 +104,7 @@ impl TcpPinger {
         })
     }
 
+    #[instrument]
     async fn ping_inner(&self) -> Result<TcpPingResult> {
         let mut resolve_time: Option<Duration> = None;
         let begin = Instant::now();
@@ -136,6 +141,7 @@ impl TcpPinger {
         })
     }
 
+    #[instrument]
     pub async fn ping(&self) -> Result<TcpPingResult> {
         let task_submission_time = Instant::now();
         let result =

@@ -1,10 +1,11 @@
 use crate::Resolve;
 use crate::metric::PingMetrics;
 use crate::metric::ResolveLabel;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub trait TimeReporter {
+pub trait TimeReporter: Debug {
     fn report_time(&self, name: String, time: Duration, ok: bool);
 }
 
@@ -20,6 +21,7 @@ impl TimeReporter for PingMetrics {
     }
 }
 
+#[derive(Debug)]
 pub struct TimedResolver<R, T>
 where
     R: Resolve + Send + Sync,
@@ -29,7 +31,9 @@ where
     reporter: Arc<T>,
 }
 
-impl<R: Resolve + Send + Sync, T: TimeReporter + Send + Sync> Resolve for TimedResolver<R, T> {
+impl<R: Resolve + Send + Sync, T: TimeReporter + Send + Sync> reqwest::dns::Resolve
+    for TimedResolver<R, T>
+{
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let str_name = String::from(name.as_str());
         let fut = self.resolver.resolve(name);
@@ -47,6 +51,8 @@ impl<R: Resolve + Send + Sync, T: TimeReporter + Send + Sync> Resolve for TimedR
         })
     }
 }
+
+impl<R: Resolve + Send + Sync, T: TimeReporter + Send + Sync> Resolve for TimedResolver<R, T> {}
 
 impl<R, T> TimedResolver<R, T>
 where

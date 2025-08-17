@@ -1,12 +1,12 @@
-use std::time::Duration;
-
 use crate::Resolve;
 use hickory_resolver::Resolver;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+use hickory_resolver::config::ResolverOpts;
 use hickory_resolver::lookup_ip::LookupIpIntoIter;
 use hickory_resolver::name_server::TokioConnectionProvider;
 use reqwest::dns::Addrs;
 use std::net::SocketAddr;
+use std::time::Duration;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct HickoryWrapper(Resolver<TokioConnectionProvider>);
@@ -23,7 +23,7 @@ impl Iterator for SocketAddrIter {
     }
 }
 
-impl Resolve for HickoryWrapper {
+impl reqwest::dns::Resolve for HickoryWrapper {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let resolver = self.0.clone();
         Box::pin(async move {
@@ -36,18 +36,22 @@ impl Resolve for HickoryWrapper {
     }
 }
 
-pub fn build(cache_size: usize, num_concurrent_reqs: usize, timeout: Duration) -> HickoryWrapper {
+impl Resolve for HickoryWrapper {}
+
+pub fn build(
+    cache_size: usize,
+    num_concurrent_reqs: usize,
+    timeout: Duration,
+) -> anyhow::Result<HickoryWrapper> {
     let mut options = ResolverOpts::default();
     options.cache_size = cache_size;
     options.num_concurrent_reqs = num_concurrent_reqs;
     options.timeout = timeout;
 
-    HickoryWrapper(
-        Resolver::builder_with_config(
-            ResolverConfig::default(),
-            TokioConnectionProvider::default(),
-        )
+    let hickory = Resolver::builder(TokioConnectionProvider::default())?
         .with_options(options)
-        .build(),
-    )
+        .build();
+
+    info!("Hickory DNS config: {:?}", hickory.config());
+    Ok(HickoryWrapper(hickory))
 }

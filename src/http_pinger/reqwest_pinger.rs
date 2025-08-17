@@ -1,12 +1,13 @@
 use crate::config::HttpPingerEntry;
 use crate::http_pinger::{AsyncHttpPinger, PingResponse, PingResult};
+use crate::resolver::Resolve;
 use async_trait::async_trait;
 use hyper::Method;
-use reqwest::dns::Resolve;
 use reqwest::redirect::Policy;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::instrument;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReqwestPinger {
@@ -18,6 +19,7 @@ pub(crate) struct ReqwestPinger {
 }
 
 impl ReqwestPinger {
+    #[instrument]
     async fn ping_inner(&self) -> anyhow::Result<PingResponse> {
         let builder = self
             .reqwest_client
@@ -46,6 +48,7 @@ impl ReqwestPinger {
 
 #[async_trait]
 impl AsyncHttpPinger for ReqwestPinger {
+    #[instrument]
     async fn ping(&self) -> anyhow::Result<PingResponse> {
         use tokio::time::timeout;
         let task_submission_time = Instant::now();
@@ -83,7 +86,7 @@ impl AsyncHttpPinger for ReqwestPinger {
             .connect_timeout(timeout)
             .pool_max_idle_per_host(0)
             .no_hickory_dns()
-            .dns_resolver2(resolver)
+            .dns_resolver2(resolver as Arc<dyn reqwest::dns::Resolve>)
             .redirect(Policy::none());
 
         Ok(ReqwestPinger {

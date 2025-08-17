@@ -1,3 +1,4 @@
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
@@ -48,4 +49,16 @@ pub struct PingerConfig {
     pub metrics: MetricsServerConfig,
     pub dns_timeout_millis: u64,
     pub measure_dns_stats: bool,
+}
+
+#[derive(Debug, Clone, Parser)]
+#[command(version, about, long_about = None)]
+pub struct Args {
+    /// Config file path
+    #[arg(short, long)]
+    pub config: String,
+
+    /// Enable debug mode
+    #[arg(short, long, default_value_t = false)]
+    pub debug: bool,
 }
