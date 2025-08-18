@@ -65,6 +65,7 @@ async fn load_config(config_path: &str) -> Result<PingerConfig> {
 }
 
 /// Create HTTP ping task
+#[allow(clippy::too_many_arguments)]
 fn create_http_ping_task(
     entry: crate::config::HttpPingerEntry,
     timeout: Duration,
@@ -119,6 +120,7 @@ fn create_http_ping_task(
 }
 
 /// Create TCP ping task
+#[allow(clippy::too_many_arguments)]
 async fn create_tcp_ping_task(
     entry: crate::config::TcpPingerEntry,
     timeout: Duration,

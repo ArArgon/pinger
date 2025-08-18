@@ -3,7 +3,6 @@ use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, rou
 use prometheus_client::encoding::text::encode;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
-use tracing::info;
 
 pub fn create_metrics_router(metrics: SharedMetrics) -> Router {
     Router::new()
