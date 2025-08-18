@@ -1,7 +1,9 @@
 use crate::metric::SharedMetrics;
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use prometheus_client::encoding::text::encode;
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
+use tracing::info;
 
 pub fn create_metrics_router(metrics: SharedMetrics) -> Router {
     Router::new()
@@ -30,9 +32,10 @@ async fn health_handler() -> impl IntoResponse {
 
 pub async fn start_metrics_server(
     metrics: SharedMetrics,
-    host: &str,
+    host: String,
     port: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
+    cancel: CancellationToken,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = create_metrics_router(metrics);
 
     let bind_address = format!("{}:{}", host, port);
@@ -42,7 +45,11 @@ pub async fn start_metrics_server(
     println!("Metrics available at: http://{}:{}/metrics", host, port);
     println!("Health check available at: http://{}:{}/health", host, port);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            cancel.cancelled().await;
+        })
+        .await?;
 
     Ok(())
 }

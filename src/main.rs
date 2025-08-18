@@ -10,7 +10,9 @@ use clap::Parser;
 use resolver::Resolve;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::signal;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 mod config;
@@ -71,6 +73,7 @@ fn create_http_ping_task(
     resolver: Arc<dyn Resolve>,
     metrics: SharedMetrics,
     pinger_type: HttpPinger,
+    cancel: CancellationToken,
 ) -> Result<JoinHandle<()>> {
     let pinger_result = match pinger_type {
         HttpPinger::Hyper => {
@@ -85,19 +88,25 @@ fn create_http_ping_task(
             let task = tokio::spawn(async move {
                 let mut tick = tokio::time::interval(interval);
                 loop {
-                    for _ in 0..retries {
-                        match pinger.ping().await {
-                            Ok(response) => {
-                                info!(name: "httping", "Response: {:?}", response);
-                                metrics.record_http_ping(&response);
-                                break;
-                            }
-                            Err(e) => {
-                                error!("HTTP Ping error: {}", e);
+                    tokio::select! {
+                        _ = cancel.cancelled() => {
+                            break;
+                        }
+                        _ = tick.tick() => {
+                            for _ in 0..retries {
+                                match pinger.ping().await {
+                                    Ok(response) => {
+                                        info!(name: "httping", "Response: {:?}", response);
+                                        metrics.record_http_ping(&response);
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        error!("HTTP Ping error: {}", e);
+                                    }
+                                }
                             }
                         }
                     }
-                    tick.tick().await;
                 }
             });
             Ok(task)
@@ -118,25 +127,30 @@ async fn create_tcp_ping_task(
     retries: u8,
     resolver: Arc<dyn Resolve>,
     metrics: SharedMetrics,
+    cancel: CancellationToken,
 ) -> Result<JoinHandle<()>> {
     match TcpPinger::new(entry, timeout, measure_dns_stats, resolver).await {
         Ok(pinger) => {
             let mut tick = tokio::time::interval(interval);
             let task = tokio::spawn(async move {
                 loop {
-                    for _ in 0..retries {
-                        match pinger.ping().await {
-                            Ok(response) => {
-                                info!(name: "tcping", "Response: {:?}", response);
-                                metrics.record_tcp_ping(&response);
-                                break;
-                            }
-                            Err(e) => {
-                                error!("TCP Ping error: {}", e);
+                    tokio::select! {
+                        _ = cancel.cancelled() => { break; }
+                        _ = tick.tick() => {
+                            for _ in 0..retries {
+                                match pinger.ping().await {
+                                    Ok(response) => {
+                                        info!(name: "tcping", "Response: {:?}", response);
+                                        metrics.record_tcp_ping(&response);
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        error!("TCP Ping error: {}", e);
+                                    }
+                                }
                             }
                         }
                     }
-                    tick.tick().await;
                 }
             });
             Ok(task)
@@ -146,6 +160,19 @@ async fn create_tcp_ping_task(
             Err(anyhow::anyhow!("TCP pinger creation failed: {}", e))
         }
     }
+}
+
+fn cancel_handler() -> (CancellationToken, JoinHandle<()>) {
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+    let cancel_task = tokio::spawn(async move {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to register Ctrl+C handler");
+        info!("Received interrupt signal, cancelling tasks");
+        cancel_clone.cancel();
+    });
+    (cancel, cancel_task)
 }
 
 #[tokio::main]
@@ -162,17 +189,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize metrics
     let metrics: SharedMetrics = Arc::new(PingMetrics::default());
 
+    // Ctrl+C to cancel all tasks
+    let (cancel, cancel_task) = cancel_handler();
+
     // Start metrics server in background with CLI configurable host and port
-    let metrics_server_handle = {
-        let metrics_clone = Arc::clone(&metrics);
-        let host = args.bind.clone();
-        let port = args.port;
-        tokio::spawn(async move {
-            start_metrics_server(metrics_clone, &host, port)
-                .await
-                .unwrap()
-        })
-    };
+    let metrics_server_handle = tokio::spawn(start_metrics_server(
+        Arc::clone(&metrics),
+        args.bind.clone(),
+        args.port,
+        cancel.clone(),
+    ));
 
     let resolver = resolver::build_resolver(&config, Arc::clone(&metrics))?;
     let mut ping_tasks: Vec<JoinHandle<()>> = Vec::new();
@@ -196,6 +222,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&resolver),
                 Arc::clone(&metrics),
                 config.http.pinger,
+                cancel.clone(),
             ) {
                 Ok(task) => ping_tasks.push(task),
                 Err(e) => error!("Failed to create HTTP ping task: {}", e),
@@ -222,6 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.tcp.retries,
                 Arc::clone(&resolver),
                 Arc::clone(&metrics),
+                cancel.clone(),
             )
             .await
             {
@@ -243,6 +271,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Wait for metrics server
     let _ = metrics_server_handle.await;
+
+    // Wait for cancel task
+    let _ = cancel_task.await;
 
     Ok(())
 }

@@ -20,7 +20,7 @@ COPY src/ ./src/
 RUN cargo build --release
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -51,4 +51,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3000/metrics || exit 1
 
 # Default command (user must provide config file)
-CMD ["/app/pinger", "--config", "/etc/pinger/config.json"]
+CMD ["/app/pinger"]
