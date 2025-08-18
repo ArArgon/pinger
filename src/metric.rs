@@ -252,19 +252,15 @@ impl From<tcp_pinger::TcpPingResult> for TcpPingLabel {
 impl ResolveErrorType {
     fn new(error: &(dyn std::error::Error + 'static)) -> Self {
         match error.downcast_ref::<ResolveError>() {
-            Some(error) => {
-                match error.kind() {
-                    ResolveErrorKind::Proto(proto_error) => {
-                        match proto_error.kind() {
-                            ProtoErrorKind::NoRecordsFound { .. } => ResolveErrorType::NoRecordsFound,
-                            ProtoErrorKind::Timeout => ResolveErrorType::Timeout,
-                            ProtoErrorKind::NoConnections => ResolveErrorType::NoResolverAvailable,
-                            _ => ResolveErrorType::Other,
-                        }
-                    }
+            Some(error) => match error.kind() {
+                ResolveErrorKind::Proto(proto_error) => match proto_error.kind() {
+                    ProtoErrorKind::NoRecordsFound { .. } => ResolveErrorType::NoRecordsFound,
+                    ProtoErrorKind::Timeout => ResolveErrorType::Timeout,
+                    ProtoErrorKind::NoConnections => ResolveErrorType::NoResolverAvailable,
                     _ => ResolveErrorType::Other,
-                }
-            }
+                },
+                _ => ResolveErrorType::Other,
+            },
             _ => ResolveErrorType::Other,
         }
     }
