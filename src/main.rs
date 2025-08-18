@@ -96,8 +96,8 @@ fn create_http_ping_task(
                                 error!("HTTP Ping error: {}", e);
                             }
                         }
-                        tick.tick().await;
                     }
+                    tick.tick().await;
                 }
             });
             Ok(task)
@@ -135,8 +135,8 @@ async fn create_tcp_ping_task(
                                 error!("TCP Ping error: {}", e);
                             }
                         }
-                        tick.tick().await;
                     }
+                    tick.tick().await;
                 }
             });
             Ok(task)
