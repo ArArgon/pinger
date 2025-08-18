@@ -27,6 +27,7 @@ enum HttpPingerImpl {
 }
 
 impl HttpPingerImpl {
+    #[inline]
     async fn ping(&self) -> Result<crate::http_pinger::PingResponse> {
         match self {
             HttpPingerImpl::Hyper(pinger) => pinger.ping().await,
@@ -37,9 +38,28 @@ impl HttpPingerImpl {
 
 /// Load configuration from file
 async fn load_config(config_path: &str) -> Result<PingerConfig> {
-    let config_content = tokio::fs::read_to_string(config_path).await?;
-    serde_json::from_str(&config_content)
-        .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))
+    let path = std::path::Path::new(config_path);
+
+    let config_content = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path.display(), e))?;
+    let ext = path
+        .file_name()
+        .ok_or(anyhow::anyhow!("Failed to get file name"))?
+        .to_str()
+        .ok_or(anyhow::anyhow!("Failed to decode file name"))?
+        .split(".")
+        .last()
+        .ok_or(anyhow::anyhow!("Failed to get file extension"))?;
+    match ext {
+        "json" => serde_json::from_str(&config_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e)),
+        "yaml" => serde_yaml::from_str(&config_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e)),
+        "toml" => toml::from_str(&config_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e)),
+        _ => anyhow::bail!("Unsupported file extension: {}", ext),
+    }
 }
 
 /// Create HTTP ping task
@@ -47,6 +67,7 @@ fn create_http_ping_task(
     entry: crate::config::HttpPingerEntry,
     timeout: Duration,
     interval: Duration,
+    retries: u8,
     resolver: Arc<dyn Resolve>,
     metrics: SharedMetrics,
     pinger_type: HttpPinger,
@@ -64,16 +85,19 @@ fn create_http_ping_task(
             let task = tokio::spawn(async move {
                 let mut tick = tokio::time::interval(interval);
                 loop {
-                    match pinger.ping().await {
-                        Ok(response) => {
-                            info!(name: "httping", "Response: {:?}", response);
-                            metrics.record_http_ping(&response);
+                    for _ in 0..retries {
+                        match pinger.ping().await {
+                            Ok(response) => {
+                                info!(name: "httping", "Response: {:?}", response);
+                                metrics.record_http_ping(&response);
+                                break;
+                            }
+                            Err(e) => {
+                                error!("HTTP Ping error: {}", e);
+                            }
                         }
-                        Err(e) => {
-                            error!("HTTP Ping error: {}", e);
-                        }
+                        tick.tick().await;
                     }
-                    tick.tick().await;
                 }
             });
             Ok(task)
@@ -91,23 +115,28 @@ async fn create_tcp_ping_task(
     timeout: Duration,
     interval: Duration,
     measure_dns_stats: bool,
+    retries: u8,
     resolver: Arc<dyn Resolve>,
     metrics: SharedMetrics,
 ) -> Result<JoinHandle<()>> {
     match TcpPinger::new(entry, timeout, measure_dns_stats, resolver).await {
         Ok(pinger) => {
+            let mut tick = tokio::time::interval(interval);
             let task = tokio::spawn(async move {
                 loop {
-                    match pinger.ping().await {
-                        Ok(response) => {
-                            info!(name: "tcping", "Response: {:?}", response);
-                            metrics.record_tcp_ping(&response);
+                    for _ in 0..retries {
+                        match pinger.ping().await {
+                            Ok(response) => {
+                                info!(name: "tcping", "Response: {:?}", response);
+                                metrics.record_tcp_ping(&response);
+                                break;
+                            }
+                            Err(e) => {
+                                error!("TCP Ping error: {}", e);
+                            }
                         }
-                        Err(e) => {
-                            error!("TCP Ping error: {}", e);
-                        }
+                        tick.tick().await;
                     }
-                    tokio::time::sleep(interval).await;
                 }
             });
             Ok(task)
@@ -163,6 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 entry,
                 http_timeout,
                 http_interval,
+                config.http.retries,
                 Arc::clone(&resolver),
                 Arc::clone(&metrics),
                 config.http.pinger,
@@ -189,6 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tcp_timeout,
                 tcp_interval,
                 config.measure_dns_stats,
+                config.tcp.retries,
                 Arc::clone(&resolver),
                 Arc::clone(&metrics),
             )
@@ -200,7 +231,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Started {} ping tasks", ping_tasks.len());
     println!(
         "Metrics server running on http://{}:{}/metrics",
         args.bind, args.port
