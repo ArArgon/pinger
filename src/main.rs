@@ -10,8 +10,9 @@ use clap::Parser;
 use resolver::Resolve;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::signal;
+use tokio::signal::unix::SignalKind;
 use tokio::task::JoinHandle;
+use tokio::{select, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -168,10 +169,19 @@ fn cancel_handler() -> (CancellationToken, JoinHandle<()>) {
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
     let cancel_task = tokio::spawn(async move {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to register Ctrl+C handler");
-        info!("Received interrupt signal, cancelling tasks");
+        let mut sigterm = signal::unix::signal(SignalKind::terminate())
+            .expect("Failed to register SIGTERM signal handler");
+        let mut sigint = signal::unix::signal(SignalKind::interrupt())
+            .expect("Failed to register SIGINT signal handler");
+
+        select! {
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM signal, cancelling tasks");
+            }
+            _ = sigint.recv() => {
+                info!("Received SIGINT signal, cancelling tasks");
+            }
+        }
         cancel_clone.cancel();
     });
     (cancel, cancel_task)
