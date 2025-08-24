@@ -2,6 +2,7 @@ use crate::Resolve;
 use crate::metric::PingMetrics;
 use crate::metric::ResolveErrorLabel;
 use crate::metric::ResolveLabel;
+use crate::metric::TIMEOUT_VALUE_US;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,10 +28,15 @@ impl TimeReporter for PingMetrics {
         let time = time.as_micros() as f64;
 
         if let Some(err) = err {
-            let label = ResolveErrorLabel::new(label, err);
-            self.resolve_failure.get_or_create(&label).inc();
+            self.resolve_time_series_us
+                .get_or_create(&label)
+                .set(TIMEOUT_VALUE_US);
+            self.resolve_failure
+                .get_or_create(&ResolveErrorLabel::new(label, err))
+                .inc();
         } else {
             self.resolve_time_us.get_or_create(&label).observe(time);
+            self.resolve_time_series_us.get_or_create(&label).set(time);
         }
     }
 }
@@ -63,7 +69,6 @@ impl<R: Resolve + Send + Sync, T: TimeReporter + Send + Sync> reqwest::dns::Reso
                     reporter.report_time(str_name, begin.elapsed(), Some(e.as_ref()))
                 }
             }
-
             result
         })
     }

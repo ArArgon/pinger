@@ -4,9 +4,13 @@ use hickory_resolver::{ResolveError, ResolveErrorKind};
 use prometheus_client::encoding::{EncodeLabelSet, EncodeLabelValue};
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
+use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::{Histogram, exponential_buckets_range};
 use prometheus_client::registry::Registry;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+
+pub const TIMEOUT_VALUE_US: f64 = std::time::Duration::from_secs(10).as_micros() as f64;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelValue)]
 pub enum PingStatus {
@@ -81,14 +85,17 @@ pub struct PingMetrics {
 
     // HTTP metrics - Gauge-based individual ping results
     pub http_ping_response_time_us: Family<HttpPingLabel, Histogram>,
+    pub http_ping_response_time_series_us: Family<HttpPingLabel, Gauge<f64, AtomicU64>>,
     pub http_ping_failure: Family<HttpPingLabel, Counter>,
 
     // TCP metrics - Gauge-based individual ping results
     pub tcp_ping_response_time_us: Family<TcpPingLabel, Histogram>,
+    pub tcp_ping_response_time_series_us: Family<TcpPingLabel, Gauge<f64, AtomicU64>>,
     pub tcp_ping_failure: Family<TcpPingLabel, Counter>,
 
     // DNS metrics
     pub resolve_time_us: Family<ResolveLabel, Histogram>,
+    pub resolve_time_series_us: Family<ResolveLabel, Gauge<f64, AtomicU64>>,
     pub resolve_failure: Family<ResolveErrorLabel, Counter>,
 }
 
@@ -116,6 +123,11 @@ impl Default for PingMetrics {
             Family::<TcpPingLabel, Histogram>::new_with_constructor(Self::default_histogram);
         let resolve_time_us =
             Family::<ResolveLabel, Histogram>::new_with_constructor(Self::default_histogram);
+        let http_ping_response_time_series_us =
+            Family::<HttpPingLabel, Gauge<f64, AtomicU64>>::default();
+        let tcp_ping_response_time_series_us =
+            Family::<TcpPingLabel, Gauge<f64, AtomicU64>>::default();
+        let resolve_time_series_us = Family::<ResolveLabel, Gauge<f64, AtomicU64>>::default();
 
         registry.register(
             "http_ping_failure",
@@ -157,9 +169,12 @@ impl Default for PingMetrics {
             registry,
             http_ping_failure,
             http_ping_response_time_us,
+            http_ping_response_time_series_us,
             tcp_ping_response_time_us,
+            tcp_ping_response_time_series_us,
             tcp_ping_failure,
             resolve_time_us,
+            resolve_time_series_us,
             resolve_failure,
         }
     }
@@ -174,9 +189,15 @@ impl PingMetrics {
             self.http_ping_response_time_us
                 .get_or_create(&label)
                 .observe(response_time.as_micros() as f64);
+            self.http_ping_response_time_series_us
+                .get_or_create(&label)
+                .set(response_time.as_micros() as f64);
         } else {
             // Record failure count
             self.http_ping_failure.get_or_create(&label).inc();
+            self.http_ping_response_time_series_us
+                .get_or_create(&label)
+                .set(TIMEOUT_VALUE_US);
         }
     }
 
@@ -191,9 +212,15 @@ impl PingMetrics {
             self.tcp_ping_response_time_us
                 .get_or_create(&label)
                 .observe(established_time.as_micros() as f64);
+            self.tcp_ping_response_time_series_us
+                .get_or_create(&label)
+                .set(established_time.as_micros() as f64);
         } else {
             // Record failure count
             self.tcp_ping_failure.get_or_create(&label).inc();
+            self.tcp_ping_response_time_series_us
+                .get_or_create(&label)
+                .set(TIMEOUT_VALUE_US);
         }
     }
 }
