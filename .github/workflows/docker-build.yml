@@ -146,7 +146,7 @@ jobs:
       - name: Pull and test image
         run: |
           docker pull ${{ env.REGISTRY }}/${{ steps.image-name.outputs.name }}:latest
-          docker run --rm ${{ env.REGISTRY }}/${{ steps.image-name.outputs.name }}:latest /app/pinger --help
+          docker run --rm ${{ env.REGISTRY }}/${{ steps.image-name.outputs.name }}:latest --help
 
   security-scan:
     runs-on: ubuntu-latest
