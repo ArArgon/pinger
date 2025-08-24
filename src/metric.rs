@@ -84,18 +84,18 @@ pub struct PingMetrics {
     pub registry: Registry,
 
     // HTTP metrics - Gauge-based individual ping results
-    pub http_ping_response_time_us: Family<HttpPingLabel, Histogram>,
-    pub http_ping_response_time_series_us: Family<HttpPingLabel, Gauge<f64, AtomicU64>>,
+    pub http_ping_response_time_histogram_us: Family<HttpPingLabel, Histogram>,
+    pub http_ping_response_time_us: Family<HttpPingLabel, Gauge<f64, AtomicU64>>,
     pub http_ping_failure: Family<HttpPingLabel, Counter>,
 
     // TCP metrics - Gauge-based individual ping results
-    pub tcp_ping_response_time_us: Family<TcpPingLabel, Histogram>,
-    pub tcp_ping_response_time_series_us: Family<TcpPingLabel, Gauge<f64, AtomicU64>>,
+    pub tcp_ping_response_time_histogram_us: Family<TcpPingLabel, Histogram>,
+    pub tcp_ping_response_time_us: Family<TcpPingLabel, Gauge<f64, AtomicU64>>,
     pub tcp_ping_failure: Family<TcpPingLabel, Counter>,
 
     // DNS metrics
-    pub resolve_time_us: Family<ResolveLabel, Histogram>,
-    pub resolve_time_series_us: Family<ResolveLabel, Gauge<f64, AtomicU64>>,
+    pub resolve_time_histogram_us: Family<ResolveLabel, Histogram>,
+    pub resolve_time_us: Family<ResolveLabel, Gauge<f64, AtomicU64>>,
     pub resolve_failure: Family<ResolveErrorLabel, Counter>,
 }
 
@@ -115,66 +115,77 @@ impl Default for PingMetrics {
         let tcp_ping_failure = Family::<TcpPingLabel, Counter>::default();
         let resolve_failure = Family::<ResolveErrorLabel, Counter>::default();
 
-        let http_ping_response_time_us =
+        let http_ping_response_time_histogram_us =
             Family::<HttpPingLabel, Histogram>::new_with_constructor(Self::default_histogram);
-        let tcp_ping_response_time_us =
+        let tcp_ping_response_time_histogram_us =
             Family::<TcpPingLabel, Histogram>::new_with_constructor(Self::default_histogram);
-        let tcp_ping_resolve_time_us =
-            Family::<TcpPingLabel, Histogram>::new_with_constructor(Self::default_histogram);
-        let resolve_time_us =
+        let resolve_time_histogram_us =
             Family::<ResolveLabel, Histogram>::new_with_constructor(Self::default_histogram);
-        let http_ping_response_time_series_us =
-            Family::<HttpPingLabel, Gauge<f64, AtomicU64>>::default();
-        let tcp_ping_response_time_series_us =
-            Family::<TcpPingLabel, Gauge<f64, AtomicU64>>::default();
-        let resolve_time_series_us = Family::<ResolveLabel, Gauge<f64, AtomicU64>>::default();
+        let http_ping_response_time_us = Family::<HttpPingLabel, Gauge<f64, AtomicU64>>::default();
+        let tcp_ping_response_time_us = Family::<TcpPingLabel, Gauge<f64, AtomicU64>>::default();
+        let resolve_time_us = Family::<ResolveLabel, Gauge<f64, AtomicU64>>::default();
 
+        // HTTP metrics
         registry.register(
             "http_ping_failure",
             "Failure number of HTTP ping requests",
             http_ping_failure.clone(),
         );
         registry.register(
-            "tcp_ping_failure",
-            "Failure number of TCP ping requests",
-            tcp_ping_failure.clone(),
+            "http_ping_response_time_histogram_us",
+            "HTTP ping response time histogram in us - updates with each ping",
+            http_ping_response_time_histogram_us.clone(),
         );
         registry.register(
             "http_ping_response_time_us",
             "HTTP ping response time in us - updates with each ping",
             http_ping_response_time_us.clone(),
         );
+
+        // TCP metrics
+        registry.register(
+            "tcp_ping_failure",
+            "Failure number of TCP ping requests",
+            tcp_ping_failure.clone(),
+        );
+        registry.register(
+            "tcp_ping_response_time_histogram_us",
+            "TCP ping response time histogram in us - updates with each ping",
+            tcp_ping_response_time_histogram_us.clone(),
+        );
         registry.register(
             "tcp_ping_response_time_us",
             "TCP ping response time in us - updates with each ping",
             tcp_ping_response_time_us.clone(),
         );
-        registry.register(
-            "tcp_ping_resolve_time_us",
-            "TCP ping resolve time in us - updates with each ping",
-            tcp_ping_resolve_time_us.clone(),
-        );
-        registry.register(
-            "resolve_time_us",
-            "DNS resolve time - present when DNS is timed",
-            resolve_time_us.clone(),
-        );
+
+        // DNS metrics
         registry.register(
             "resolve_failure",
             "DNS resolution error count - present when DNS is timed",
             resolve_failure.clone(),
         );
+        registry.register(
+            "resolve_time_histogram_us",
+            "DNS resolve time histogram in us - present when DNS is timed",
+            resolve_time_histogram_us.clone(),
+        );
+        registry.register(
+            "resolve_time_us",
+            "DNS resolve time in us - updates with each ping",
+            resolve_time_us.clone(),
+        );
 
         Self {
             registry,
             http_ping_failure,
+            http_ping_response_time_histogram_us,
             http_ping_response_time_us,
-            http_ping_response_time_series_us,
+            tcp_ping_response_time_histogram_us,
             tcp_ping_response_time_us,
-            tcp_ping_response_time_series_us,
             tcp_ping_failure,
+            resolve_time_histogram_us,
             resolve_time_us,
-            resolve_time_series_us,
             resolve_failure,
         }
     }
@@ -186,16 +197,16 @@ impl PingMetrics {
 
         // Record individual ping response time in us
         if let http_pinger::PingResult::Success { response_time, .. } = &response.result {
-            self.http_ping_response_time_us
+            self.http_ping_response_time_histogram_us
                 .get_or_create(&label)
                 .observe(response_time.as_micros() as f64);
-            self.http_ping_response_time_series_us
+            self.http_ping_response_time_us
                 .get_or_create(&label)
                 .set(response_time.as_micros() as f64);
         } else {
             // Record failure count
             self.http_ping_failure.get_or_create(&label).inc();
-            self.http_ping_response_time_series_us
+            self.http_ping_response_time_us
                 .get_or_create(&label)
                 .set(TIMEOUT_VALUE_US);
         }
@@ -209,16 +220,16 @@ impl PingMetrics {
             established_time, ..
         } = &result.response
         {
-            self.tcp_ping_response_time_us
+            self.tcp_ping_response_time_histogram_us
                 .get_or_create(&label)
                 .observe(established_time.as_micros() as f64);
-            self.tcp_ping_response_time_series_us
+            self.tcp_ping_response_time_us
                 .get_or_create(&label)
                 .set(established_time.as_micros() as f64);
         } else {
             // Record failure count
             self.tcp_ping_failure.get_or_create(&label).inc();
-            self.tcp_ping_response_time_series_us
+            self.tcp_ping_response_time_us
                 .get_or_create(&label)
                 .set(TIMEOUT_VALUE_US);
         }

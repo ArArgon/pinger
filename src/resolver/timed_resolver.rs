@@ -28,15 +28,17 @@ impl TimeReporter for PingMetrics {
         let time = time.as_micros() as f64;
 
         if let Some(err) = err {
-            self.resolve_time_series_us
+            self.resolve_time_us
                 .get_or_create(&label)
                 .set(TIMEOUT_VALUE_US);
             self.resolve_failure
                 .get_or_create(&ResolveErrorLabel::new(label, err))
                 .inc();
         } else {
-            self.resolve_time_us.get_or_create(&label).observe(time);
-            self.resolve_time_series_us.get_or_create(&label).set(time);
+            self.resolve_time_histogram_us
+                .get_or_create(&label)
+                .observe(time);
+            self.resolve_time_us.get_or_create(&label).set(time);
         }
     }
 }
