@@ -5,10 +5,10 @@ use prometheus_client::encoding::{EncodeLabelSet, EncodeLabelValue};
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
-use prometheus_client::metrics::histogram::{Histogram, exponential_buckets_range};
+use prometheus_client::metrics::histogram::{exponential_buckets_range, Histogram};
 use prometheus_client::registry::Registry;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
 pub const TIMEOUT_VALUE_US: f64 = std::time::Duration::from_secs(10).as_micros() as f64;
 
@@ -30,7 +30,6 @@ pub enum FailureType {
 pub struct HttpPingLabel {
     pub url: String,
     pub method: String,
-    pub ip: Option<String>,
     pub status: PingStatus,
     pub status_code: Option<u32>,
 }
@@ -48,7 +47,6 @@ pub struct HttpPingFailureLabel {
 pub struct TcpPingLabel {
     pub host: String,
     pub port: u32,
-    pub resolved_ip: String,
     pub response: PingStatus,
 }
 
@@ -240,7 +238,6 @@ impl From<http_pinger::PingResponse> for HttpPingLabel {
     fn from(response: http_pinger::PingResponse) -> Self {
         let http_pinger::PingResponse {
             url,
-            ip,
             result,
             method,
             ..
@@ -259,7 +256,6 @@ impl From<http_pinger::PingResponse> for HttpPingLabel {
         HttpPingLabel {
             url,
             method: method.to_string(),
-            ip,
             status: response,
             status_code,
         }
@@ -270,14 +266,12 @@ impl From<tcp_pinger::TcpPingResult> for TcpPingLabel {
     fn from(result: tcp_pinger::TcpPingResult) -> Self {
         let tcp_pinger::TcpPingResult {
             address: (host, port),
-            resolved_ip,
             response,
             ..
         } = result;
         TcpPingLabel {
             host: String::from(host.to_str()),
             port: port.into(),
-            resolved_ip: resolved_ip.to_string(),
             response: match response {
                 tcp_pinger::TcpPingResponse::Success { .. } => PingStatus::Success,
                 tcp_pinger::TcpPingResponse::Failure(_) => PingStatus::Failure,
