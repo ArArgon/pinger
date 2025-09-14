@@ -5,10 +5,10 @@ use prometheus_client::encoding::{EncodeLabelSet, EncodeLabelValue};
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
-use prometheus_client::metrics::histogram::{exponential_buckets_range, Histogram};
+use prometheus_client::metrics::histogram::{Histogram, exponential_buckets_range};
 use prometheus_client::registry::Registry;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 pub const TIMEOUT_VALUE_US: f64 = std::time::Duration::from_secs(10).as_micros() as f64;
 
